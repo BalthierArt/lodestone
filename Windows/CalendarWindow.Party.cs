@@ -321,6 +321,7 @@ public sealed partial class CalendarWindow
     {
         selectedPartyEvent = partyEvent;
         selectedEntry = null;
+        selectedSubmarineReturn = null;
         selectedDay = null;
         partyEventWindowNeedsPlacement = true;
     }

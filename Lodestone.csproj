@@ -1,7 +1,7 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
     <Authors>leonhart</Authors>
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
     <PackageProjectUrl>https://na.finalfantasyxiv.com/lodestone/</PackageProjectUrl>
     <Description>Lodestone event calendar with image-backed day cells.</Description>
   </PropertyGroup>

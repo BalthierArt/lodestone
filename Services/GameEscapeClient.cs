@@ -7,6 +7,7 @@ namespace Lodestone.Services;
 public sealed class GameEscapeClient : IDisposable
 {
     private const string BaseUrl = "https://ffxiv.gamerescape.com";
+    private const string ConsoleGamesWikiBaseUrl = "https://ffxiv.consolegameswiki.com";
     private const int MaxCacheEntries = 80;
     private const int MaxFetchAttempts = 3;
     private readonly HttpClient httpClient = new();
@@ -26,8 +27,11 @@ public sealed class GameEscapeClient : IDisposable
     {
         var slug = Slugify(questName);
         var pageUrl = $"{BaseUrl}/wiki/{slug}";
+        var consolePageUrl = $"{ConsoleGamesWikiBaseUrl}/wiki/{slug}";
         var cached = GetCachedQuest(slug);
         var errors = new List<string>();
+        GameEscapeQuest? locationFallback = null;
+        var locationFallbackChecked = false;
 
         foreach (var fetcher in new Func<string, CancellationToken, Task<string>>[] { FetchParseApiAsync, FetchRawApiAsync, FetchWikiPageAsync })
         {
@@ -44,8 +48,20 @@ public sealed class GameEscapeClient : IDisposable
                         ? ParseMarkdown(content, questName, pageUrl)
                         : ParseHtml(content, questName, pageUrl);
 
-                if (!string.IsNullOrWhiteSpace(quest.Title) || quest.Requirements.Count > 0 || quest.Objectives.Count > 0)
+                quest.SourceName = "Gamer Escape";
+                if (IsUsableQuest(quest))
                 {
+                    if (!quest.HasLocation)
+                    {
+                        locationFallbackChecked = true;
+                        locationFallback = await TryLookupConsoleGamesWikiAsync(slug, questName, consolePageUrl, cancellationToken, errors);
+                        if (locationFallback is { HasLocation: true })
+                        {
+                            SetCachedQuest(slug, locationFallback);
+                            return locationFallback;
+                        }
+                    }
+
                     SetCachedQuest(slug, quest);
                     return quest;
                 }
@@ -56,10 +72,37 @@ public sealed class GameEscapeClient : IDisposable
             }
         }
 
-        if (cached != null)
+        if (!locationFallbackChecked)
+            locationFallback = await TryLookupConsoleGamesWikiAsync(slug, questName, consolePageUrl, cancellationToken, errors);
+
+        if (locationFallback != null)
+        {
+            SetCachedQuest(slug, locationFallback);
+            return locationFallback;
+        }
+
+        if (cached != null && IsUsableCachedQuest(cached))
             return cached;
 
         throw new InvalidOperationException("Look up failed, Try again later.");
+    }
+
+    private async Task<GameEscapeQuest?> TryLookupConsoleGamesWikiAsync(string slug, string questName, string pageUrl, CancellationToken cancellationToken, List<string> errors)
+    {
+        try
+        {
+            var content = await FetchConsoleRawWikiPageAsync(slug, cancellationToken);
+            if (string.IsNullOrWhiteSpace(content))
+                return null;
+
+            var quest = ParseConsoleGamesWikiRaw(content, questName, pageUrl);
+            return IsUsableQuest(quest) ? quest : null;
+        }
+        catch (Exception ex)
+        {
+            errors.Add(ex.Message);
+            return null;
+        }
     }
 
     private async Task<string> FetchParseApiAsync(string slug, CancellationToken cancellationToken)
@@ -80,7 +123,13 @@ public sealed class GameEscapeClient : IDisposable
         return await FetchStringWithRetriesAsync(url, cancellationToken);
     }
 
-    private async Task<string> FetchStringWithRetriesAsync(string url, CancellationToken cancellationToken)
+    private async Task<string> FetchConsoleRawWikiPageAsync(string slug, CancellationToken cancellationToken)
+    {
+        var url = $"{ConsoleGamesWikiBaseUrl}/wiki/{Uri.EscapeDataString(slug)}?action=raw";
+        return await FetchStringWithRetriesAsync(url, cancellationToken, "ConsoleGamesWiki");
+    }
+
+    private async Task<string> FetchStringWithRetriesAsync(string url, CancellationToken cancellationToken, string sourceName = "Gamer Escape")
     {
         for (var attempt = 1; attempt <= MaxFetchAttempts; attempt++)
         {
@@ -90,7 +139,7 @@ public sealed class GameEscapeClient : IDisposable
                 if (response.IsSuccessStatusCode)
                     return await response.Content.ReadAsStringAsync(cancellationToken);
 
-                var exception = new HttpRequestException($"Gamer Escape returned {(int)response.StatusCode} {response.StatusCode}.", null, response.StatusCode);
+                var exception = new HttpRequestException($"{sourceName} returned {(int)response.StatusCode} {response.StatusCode}.", null, response.StatusCode);
                 if (!ShouldRetry(response.StatusCode) || attempt >= MaxFetchAttempts)
                     throw exception;
             }
@@ -101,8 +150,20 @@ public sealed class GameEscapeClient : IDisposable
             await Task.Delay(TimeSpan.FromMilliseconds(350 * attempt * attempt), cancellationToken);
         }
 
-        throw new InvalidOperationException("Gamer Escape did not return data.");
+        throw new InvalidOperationException($"{sourceName} did not return data.");
     }
+
+    private static bool IsUsableQuest(GameEscapeQuest quest)
+        => quest.HasLocation
+           || !string.IsNullOrWhiteSpace(quest.Acquisition)
+           || !string.IsNullOrWhiteSpace(quest.Description)
+           || quest.Requirements.Count > 0
+           || quest.Rewards.Count > 0
+           || quest.Objectives.Count > 0;
+
+    private static bool IsUsableCachedQuest(GameEscapeQuest quest)
+        => IsUsableQuest(quest)
+           && (!quest.MapX.HasValue || !quest.MapY.HasValue || !string.IsNullOrWhiteSpace(quest.Zone) || !string.IsNullOrWhiteSpace(quest.ClosestAetheryte));
 
     private static bool ShouldRetry(HttpStatusCode? statusCode)
         => statusCode is HttpStatusCode.Forbidden
@@ -119,6 +180,9 @@ public sealed class GameEscapeClient : IDisposable
 
     private void SetCachedQuest(string slug, GameEscapeQuest quest)
     {
+        if (!IsUsableCachedQuest(quest))
+            return;
+
         lock (cacheLock)
         {
             questCache[slug] = quest;
@@ -140,6 +204,14 @@ public sealed class GameEscapeClient : IDisposable
             var json = File.ReadAllText(cachePath);
             questCache = JsonSerializer.Deserialize<Dictionary<string, GameEscapeQuest>>(json) ?? new Dictionary<string, GameEscapeQuest>(StringComparer.OrdinalIgnoreCase);
             questCache = new Dictionary<string, GameEscapeQuest>(questCache, StringComparer.OrdinalIgnoreCase);
+            var cleanedCache = questCache
+                .Where(pair => IsUsableCachedQuest(pair.Value))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+            if (cleanedCache.Count != questCache.Count)
+            {
+                questCache = cleanedCache;
+                SaveCache();
+            }
         }
         catch (Exception ex)
         {
@@ -224,13 +296,11 @@ public sealed class GameEscapeClient : IDisposable
             Query = title,
             Title = CleanTitle(title),
             Url = pageUrl,
+            SourceName = "Gamer Escape",
             FetchedAt = DateTime.UtcNow
         };
 
-        var fields = Regex.Matches(text, @"^\|\s*(?<key>[^=\r\n]+?)\s*=\s*(?<value>.*)$", RegexOptions.Multiline)
-            .Cast<Match>()
-            .GroupBy(m => m.Groups["key"].Value.Trim(), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => CleanWikiText(g.Last().Groups["value"].Value), StringComparer.OrdinalIgnoreCase);
+        var fields = ParseConsoleGamesWikiFields(text);
 
         string Field(params string[] keys)
             => keys.Select(key => fields.TryGetValue(key, out var value) ? value : string.Empty)
@@ -269,6 +339,28 @@ public sealed class GameEscapeClient : IDisposable
         return quest;
     }
 
+    private static Dictionary<string, string> ParseConsoleGamesWikiFields(string text)
+    {
+        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rawLine in text.Replace("\r", string.Empty, StringComparison.Ordinal).Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (!line.StartsWith('|'))
+                continue;
+
+            var equalIndex = line.IndexOf('=');
+            if (equalIndex <= 1)
+                continue;
+
+            var key = line[1..equalIndex].Trim();
+            var value = line[(equalIndex + 1)..].Trim();
+            if (!string.IsNullOrWhiteSpace(key))
+                fields[key] = CleanWikiText(value);
+        }
+
+        return fields;
+    }
+
     private static GameEscapeQuest ParseHtml(string html, string query, string pageUrl)
     {
         var quest = new GameEscapeQuest
@@ -276,6 +368,7 @@ public sealed class GameEscapeClient : IDisposable
             Query = query,
             Url = pageUrl,
             Title = CleanTitle(FirstMatch(html, "<h1[^>]*>(?<value>.*?)</h1>")),
+            SourceName = "Gamer Escape",
             FetchedAt = DateTime.UtcNow
         };
         if (string.IsNullOrWhiteSpace(quest.Title))
@@ -319,6 +412,7 @@ public sealed class GameEscapeClient : IDisposable
             Query = query,
             Url = pageUrl,
             Title = CleanTitle(query),
+            SourceName = "Gamer Escape",
             FetchedAt = DateTime.UtcNow
         };
 
@@ -351,6 +445,75 @@ public sealed class GameEscapeClient : IDisposable
             .ToList();
 
         ParseLocation(quest);
+        ComposeAcquisition(quest);
+        return quest;
+    }
+
+    private static GameEscapeQuest ParseConsoleGamesWikiRaw(string text, string query, string pageUrl)
+    {
+        var quest = new GameEscapeQuest
+        {
+            Query = query,
+            Url = pageUrl,
+            Title = CleanTitle(query),
+            SourceName = "ConsoleGamesWiki",
+            FetchedAt = DateTime.UtcNow
+        };
+
+        var fields = ParseConsoleGamesWikiFields(text);
+
+        string Field(params string[] keys)
+            => keys.Select(key => fields.TryGetValue(key, out var value) ? value : string.Empty)
+                .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+
+        quest.Title = CleanTitle(Field("title"));
+        if (string.IsNullOrWhiteSpace(quest.Title))
+            quest.Title = CleanTitle(query);
+
+        quest.QuestGiver = Field("quest-giver", "issuer", "npc");
+        quest.Zone = Field("location", "zone");
+        quest.Description = Field("description");
+        quest.ClosestAetheryte = NormalizeAetheryte(Field("closest-aetheryte", "aetheryte"));
+
+        if (float.TryParse(Field("location-x", "x"), out var x))
+            quest.MapX = x;
+        if (float.TryParse(Field("location-y", "y"), out var y))
+            quest.MapY = y;
+
+        var level = Field("level", "required-level");
+        if (!string.IsNullOrWhiteSpace(level))
+            quest.Requirements.Add($"Any Class (Level {level})");
+
+        var requirements = Field("requirements", "req-quest", "req-items");
+        if (!string.IsNullOrWhiteSpace(requirements))
+            quest.Requirements.Add(requirements);
+
+        var exp = Field("exp", "experience");
+        if (!string.IsNullOrWhiteSpace(exp) && !exp.Equals("0", StringComparison.Ordinal))
+            quest.Rewards.Add($"{exp} EXP");
+
+        var gil = Field("gil");
+        if (!string.IsNullOrWhiteSpace(gil) && !gil.Equals("0", StringComparison.Ordinal))
+            quest.Rewards.Add($"{gil} Gil");
+
+        foreach (var reward in fields
+                     .Where(kvp => Regex.IsMatch(kvp.Key, @"^reward\d+$", RegexOptions.IgnoreCase) || kvp.Key.Equals("unlocks", StringComparison.OrdinalIgnoreCase))
+                     .Select(kvp => kvp.Value)
+                     .Where(NotBlank))
+            quest.Rewards.Add(reward);
+
+        quest.Rewards = quest.Rewards
+            .Select(CleanRewardText)
+            .Where(NotBlank)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        quest.Objectives = ExtractListAfterHeading(text, "Steps")
+            .Select(CleanWikiText)
+            .Where(NotBlank)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         ComposeAcquisition(quest);
         return quest;
     }

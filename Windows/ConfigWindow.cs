@@ -206,6 +206,17 @@ public sealed class ConfigWindow : Window
             DrawCheckbox("Updates", "Patch and update posts from the Lodestone update section.", plugin.Configuration.ShowUpdates, v => plugin.Configuration.ShowUpdates = v, refresh: true);
             DrawCheckbox("Status", "Recovery and obstacle/status posts from the Lodestone status section.", plugin.Configuration.ShowStatus, v => plugin.Configuration.ShowStatus = v, refresh: true);
         });
+
+        ContentBox("sourcesIntegrations", PanelBlue, false, () =>
+        {
+            SectionHeader(FontAwesomeIcon.Plug, "Plugin integrations", White());
+            DrawCheckbox("AutoRetainer submarine returns", "Reads submarine return times from AutoRetainer IPC when AutoRetainer is loaded. Lodestone keeps this data in memory and does not save it to your config.", plugin.Configuration.ShowSubmarineReturns, v =>
+            {
+                plugin.Configuration.ShowSubmarineReturns = v;
+                plugin.SubmarineService.Refresh(force: true);
+            });
+            TextWrappedColored(White(), plugin.SubmarineService.Status);
+        });
     }
 
     private void DrawCalendarTab()
@@ -401,12 +412,12 @@ public sealed class ConfigWindow : Window
             DrawCheckbox("Custom day image dim", "Lets you control how dark non-current-day images are. Off keeps the current default look.", plugin.Configuration.UseCustomDayImageDim, v => plugin.Configuration.UseCustomDayImageDim = v);
             if (plugin.Configuration.UseCustomDayImageDim)
             {
-                var dim = Math.Clamp(plugin.Configuration.DayImageDimAmount, 0f, 0.9f);
+                var dimPercent = (int)MathF.Round(Math.Clamp(plugin.Configuration.DayImageDimAmount, 0f, 0.9f) * 100f);
                 ImGui.TextUnformatted("Other day darkness");
                 ImGui.SetNextItemWidth(220f * ImGuiHelpers.GlobalScale);
-                if (ImGui.SliderFloat("##dayImageDimAmount", ref dim, 0f, 0.9f, $"{dim:P0}"))
+                if (ImGui.SliderInt("##dayImageDimAmount", ref dimPercent, 0, 90, $"{dimPercent}%"))
                 {
-                    plugin.Configuration.DayImageDimAmount = dim;
+                    plugin.Configuration.DayImageDimAmount = dimPercent / 100f;
                     plugin.Configuration.Save();
                 }
                 TextWrappedColored(Muted, "0% leaves other day images bright. Higher values add more dark overlay.");
@@ -523,6 +534,13 @@ public sealed class ConfigWindow : Window
             SectionHeader(FontAwesomeIcon.Plug, "Party Sync IPC", White());
             TextWrappedColored(White(), "Other plugins can integrate with Lodestone party events through the Lodestone.PartySync.* IPC providers.");
             TextWrappedColored(Muted, "The IPC can expose cached events, icon metadata, queued event creation, queued RSVP changes, and refresh requests. It is a local bridge, not a network relay by itself.");
+        });
+
+        ContentBox("aboutIntegrations", PanelNews, true, () =>
+        {
+            SectionHeader(FontAwesomeIcon.Ship, "AutoRetainer integration", White());
+            TextWrappedColored(White(), "When AutoRetainer is installed and has cached workshop data, Lodestone can show submarine voyage return times on the calendar.");
+            TextWrappedColored(Muted, "This uses AutoRetainer IPC locally. Lodestone does not write submarine data to disk.");
         });
 
         ContentBox("aboutLinks", PanelTeal, false, () =>

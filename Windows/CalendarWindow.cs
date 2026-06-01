@@ -15,6 +15,8 @@ public sealed partial class CalendarWindow : Window
     private const string NoteIconAsset = ImageCache.AssetScheme + "note-icon.png";
     private const string EventStartMarkerAsset = ImageCache.AssetScheme + "eventstart.png";
     private const string EventEndMarkerAsset = ImageCache.AssetScheme + "eventend.png";
+    private const string SubmarineReturnMarkerAsset = ImageCache.AssetScheme + "subicon.png";
+    private const string SubmarineReturnedHeroAsset = ImageCache.AssetScheme + "subreturned.png";
     private const string LodestoneImageStopMarker = "https://lds-img.finalfantasyxiv.com/h/L/EbtcXqPUGzsVYdi23FpUR25oH4.png";
     private static readonly Vector4 DetailPrimary = new(0.42f, 0.22f, 0.78f, 0.92f);
     private static readonly Vector4 DetailAccent = new(0.64f, 0.38f, 1.00f, 1f);
@@ -133,6 +135,7 @@ public sealed partial class CalendarWindow : Window
         DrawNoteEditorWindow();
         DrawPartyPlannerWindow();
         DrawPartyEventWindow();
+        DrawSubmarineReturnWindow();
         DrawDetailWindow();
     }
 
@@ -244,6 +247,15 @@ public sealed partial class CalendarWindow : Window
             }
         }
 
+        if (plugin.Configuration.ShowSubmarineReturns)
+        {
+            foreach (var submarineReturn in plugin.SubmarineService.Returns)
+            {
+                if (buckets.TryGetValue(submarineReturn.ReturnAt.Date, out var bucket))
+                    bucket.SubmarineReturns.Add(submarineReturn);
+            }
+        }
+
         return buckets.ToDictionary(pair => pair.Key, pair =>
         {
             var day = pair.Key;
@@ -260,7 +272,13 @@ public sealed partial class CalendarWindow : Window
                 .OrderBy(partyEvent => partyEvent.ScheduledAt ?? partyEvent.Date)
                 .ThenBy(partyEvent => partyEvent.Title)
                 .ToArray();
+            var sortedSubmarineReturns = pair.Value.SubmarineReturns
+                .OrderBy(submarineReturn => submarineReturn.ReturnAt)
+                .ThenBy(submarineReturn => submarineReturn.VesselName)
+                .ToArray();
             var heroCandidates = GetHeroImageCandidates(sortedEntries).ToArray();
+            if (sortedSubmarineReturns.Length > 0)
+                heroCandidates = [SubmarineReturnedHeroAsset, .. heroCandidates];
             var cornerKinds = sortedEntries
                 .Select(entry => entry.Kind)
                 .Distinct()
@@ -272,12 +290,14 @@ public sealed partial class CalendarWindow : Window
                 sortedEntries,
                 sortedNotes,
                 sortedPartyEvents,
-                SelectHeroImageUrl(sortedEntries),
+                sortedSubmarineReturns,
+                sortedSubmarineReturns.Length > 0 ? SubmarineReturnedHeroAsset : SelectHeroImageUrl(sortedEntries),
                 heroCandidates,
                 cornerKinds,
                 sortedEntries.Any(entry => entry.Kind == LodestoneEntryKind.SpecialEvent && entry.IsMultiDay),
                 sortedEntries.Any(entry => IsEventStartDay(entry, day)),
-                sortedEntries.Any(entry => IsEventEndDay(entry, day)));
+                sortedEntries.Any(entry => IsEventEndDay(entry, day)),
+                sortedSubmarineReturns.Length > 0);
         });
     }
 
@@ -307,6 +327,8 @@ public sealed partial class CalendarWindow : Window
             plugin.Configuration.ShowStatus,
             plugin.Configuration.ShowRecovery,
             plugin.Configuration.ShowPartyEvents,
+            plugin.Configuration.ShowSubmarineReturns,
+            plugin.SubmarineService.Version,
             plugin.Configuration.OnlyCurrentAndFuture ? DateTime.Now.Date : DateTime.MinValue,
             HiddenEntrySignature(),
             NoteSignature(),
@@ -382,6 +404,7 @@ public sealed partial class CalendarWindow : Window
         var dayEntries = data.Entries;
         var dayNotes = data.Notes;
         var partyEvents = data.PartyEvents;
+        var submarineReturns = data.SubmarineReturns;
         var currentMonth = day.Month == visibleMonth.Month;
         var today = day.Date == DateTime.Now.Date;
         var overlayHoveredForAnyDay = IsAnyActiveDayHoverOverlayHovered();
@@ -422,16 +445,18 @@ public sealed partial class CalendarWindow : Window
         }
 
         DrawEventBoundaryMarkers(data.HasEventStart, data.HasEventEnd, min, max, currentMonth);
+        var submarineHeroShown = plugin.Configuration.ShowDayImages && string.Equals(heroImageUrl, SubmarineReturnedHeroAsset, StringComparison.OrdinalIgnoreCase);
+        DrawSubmarineReturnMarker(data.HasSubmarineReturn && !submarineHeroShown, data.HasEventStart || data.HasEventEnd, min, max, currentMonth);
 
         ImGui.SetCursorScreenPos(min + new Vector2(6f, 4f) * ImGuiHelpers.GlobalScale);
         ImGui.TextUnformatted(day.Day.ToString());
 
-        DrawDayCornerIcons(data.CornerKinds, dayNotes.Length, min, max, currentMonth);
+        DrawDayCornerIcons(data.CornerKinds, dayNotes.Length, data.HasSubmarineReturn, min, max, currentMonth);
         DrawPartyEventCenterIcon(partyEvents, min, max, currentMonth);
 
         var deferHoverText = plugin.Configuration.ShowCalendarTextOnHoverOnly && (dayHovered || overlayHovered);
         if (deferHoverText)
-            dayHoverOverlay = new DayHoverOverlay(day.Date, min, max, dayNotes, partyEvents, dayEntries, currentMonth);
+            dayHoverOverlay = new DayHoverOverlay(day.Date, min, max, dayNotes, partyEvents, submarineReturns, dayEntries, currentMonth);
 
         var drawEntryText = !plugin.Configuration.ShowCalendarTextOnHoverOnly;
         if (drawEntryText)
@@ -452,6 +477,13 @@ public sealed partial class CalendarWindow : Window
                 rowsUsed++;
             }
 
+            foreach (var submarineReturn in submarineReturns.Take(Math.Max(0, 3 - rowsUsed)))
+            {
+                DrawSubmarineReturnChip(submarineReturn, min, max, y);
+                y += 21f * ImGuiHelpers.GlobalScale;
+                rowsUsed++;
+            }
+
             foreach (var entry in dayEntries.Take(Math.Max(0, 3 - rowsUsed)))
             {
                 var chipMin = new Vector2(min.X + 5f * ImGuiHelpers.GlobalScale, y);
@@ -468,7 +500,7 @@ public sealed partial class CalendarWindow : Window
                 rowsUsed++;
             }
 
-            var hiddenCount = dayEntries.Length + dayNotes.Length + partyEvents.Length - rowsUsed;
+            var hiddenCount = dayEntries.Length + dayNotes.Length + partyEvents.Length + submarineReturns.Length - rowsUsed;
             if (hiddenCount > 0)
             {
                 var text = $"+{hiddenCount}";
@@ -481,8 +513,8 @@ public sealed partial class CalendarWindow : Window
         using (ImRaii.PushId(day.ToString("yyyyMMdd")))
         {
             var blockDayClick = IsAnyActiveDayHoverOverlayHovered();
-            if (!blockDayClick && ImGui.InvisibleButton("day", size) && dayEntries.Length + dayNotes.Length + partyEvents.Length > 0)
-                ToggleDaySelection(day.Date, dayEntries, dayNotes, partyEvents);
+            if (!blockDayClick && ImGui.InvisibleButton("day", size) && dayEntries.Length + dayNotes.Length + partyEvents.Length + submarineReturns.Length > 0)
+                ToggleDaySelection(day.Date, dayEntries, dayNotes, partyEvents, submarineReturns);
             else if (blockDayClick)
                 ImGui.Dummy(size);
 
@@ -497,17 +529,18 @@ public sealed partial class CalendarWindow : Window
             }
         }
 
-        if (ImGui.IsItemHovered() && dayEntries.Length + dayNotes.Length + partyEvents.Length > 0)
+        if (ImGui.IsItemHovered() && dayEntries.Length + dayNotes.Length + partyEvents.Length + submarineReturns.Length > 0)
         {
             ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
             var tooltipLines = dayNotes.Select(n => $"Note: {NoteLabel(n)}")
                 .Concat(partyEvents.Select(e => $"Party: {PartyEventLabel(e)}"))
+                .Concat(submarineReturns.Select(e => $"Submarine: {SubmarineReturnLabel(e)}"))
                 .Concat(dayEntries.Select(e => $"{KindLabel(e.Kind)}: {e.Title}"));
             ImGui.SetTooltip(string.Join("\n", tooltipLines));
         }
     }
 
-    private void ToggleDaySelection(DateTime day, LodestoneEntry[] dayEntries, CalendarNote[] dayNotes, PartyEvent[] partyEvents)
+    private void ToggleDaySelection(DateTime day, LodestoneEntry[] dayEntries, CalendarNote[] dayNotes, PartyEvent[] partyEvents, SubmarineReturn[] submarineReturns)
     {
         if (selectedDay?.Date == day.Date)
         {
@@ -527,22 +560,36 @@ public sealed partial class CalendarWindow : Window
             return;
         }
 
-        if (dayEntries.Length == 1 && dayNotes.Length == 0 && partyEvents.Length == 0)
+        if (selectedSubmarineReturn != null && selectedSubmarineReturn.ReturnAt.Date == day.Date)
+        {
+            selectedSubmarineReturn = null;
+            return;
+        }
+
+        if (dayEntries.Length == 1 && dayNotes.Length == 0 && partyEvents.Length == 0 && submarineReturns.Length == 0)
         {
             selectedDay = null;
             SelectEntry(dayEntries[0]);
             return;
         }
 
-        if (partyEvents.Length == 1 && dayEntries.Length == 0 && dayNotes.Length == 0)
+        if (partyEvents.Length == 1 && dayEntries.Length == 0 && dayNotes.Length == 0 && submarineReturns.Length == 0)
         {
             selectedDay = null;
             SelectPartyEvent(partyEvents[0]);
             return;
         }
 
+        if (submarineReturns.Length == 1 && dayEntries.Length == 0 && dayNotes.Length == 0 && partyEvents.Length == 0)
+        {
+            selectedDay = null;
+            SelectSubmarineReturn(submarineReturns[0]);
+            return;
+        }
+
         selectedEntry = null;
         selectedPartyEvent = null;
+        selectedSubmarineReturn = null;
         selectedDay = day.Date;
         dayWindowNeedsPlacement = true;
     }
@@ -560,7 +607,7 @@ public sealed partial class CalendarWindow : Window
         }
 
         var overlay = dayHoverOverlay;
-        if (overlay.Entries.Length + overlay.Notes.Length + overlay.PartyEvents.Length == 0)
+        if (overlay.Entries.Length + overlay.Notes.Length + overlay.PartyEvents.Length + overlay.SubmarineReturns.Length == 0)
         {
             activeDayHoverOverlay = null;
             activeDayHeroPreview = null;
@@ -571,15 +618,16 @@ public sealed partial class CalendarWindow : Window
         var drawList = ImGui.GetWindowDrawList();
         var rows = overlay.Notes
             .Take(2)
-            .Select(note => new DayHoverRow(NoteLabel(note), Color(0.18f, 0.30f, 0.42f, 0.96f), null))
-            .Concat(overlay.PartyEvents.Select(partyEvent => new DayHoverRow($"Party: {PartyEventLabel(partyEvent)}", PartyEventColor(), null)))
-            .Concat(overlay.Entries.Select(entry => new DayHoverRow($"{KindLabel(entry.Kind)}: {entry.Title}", KindColor(entry.Kind), entry)))
+            .Select(note => new DayHoverRow(NoteLabel(note), Color(0.18f, 0.30f, 0.42f, 0.96f), null, null))
+            .Concat(overlay.PartyEvents.Select(partyEvent => new DayHoverRow($"Party: {PartyEventLabel(partyEvent)}", PartyEventColor(), null, null)))
+            .Concat(overlay.SubmarineReturns.Select(submarineReturn => new DayHoverRow($"Submarine: {SubmarineReturnLabel(submarineReturn)}", SubmarineReturnColor(), null, submarineReturn)))
+            .Concat(overlay.Entries.Select(entry => new DayHoverRow($"{KindLabel(entry.Kind)}: {entry.Title}", KindColor(entry.Kind), entry, null)))
             .Take(4)
             .ToList();
 
-        var hiddenCount = overlay.Entries.Length + overlay.Notes.Length + overlay.PartyEvents.Length - rows.Count;
+        var hiddenCount = overlay.Entries.Length + overlay.Notes.Length + overlay.PartyEvents.Length + overlay.SubmarineReturns.Length - rows.Count;
         if (hiddenCount > 0)
-            rows.Add(new DayHoverRow($"+{hiddenCount} more", Color(0f, 0f, 0f, 0.88f), null));
+            rows.Add(new DayHoverRow($"+{hiddenCount} more", Color(0f, 0f, 0f, 0.88f), null, null));
 
         var contentMinX = ImGui.GetWindowPos().X + ImGui.GetWindowContentRegionMin().X + 4f * scale;
         var contentMaxX = ImGui.GetWindowPos().X + ImGui.GetWindowContentRegionMax().X - 4f * scale;
@@ -600,7 +648,7 @@ public sealed partial class CalendarWindow : Window
         var popupMin = new Vector2(x, y);
         var popupMax = new Vector2(x + desiredWidth, y + rows.Count * rowHeight);
         DayHeroPreview? hoveredPreview = null;
-        var totalItems = overlay.Entries.Length + overlay.Notes.Length + overlay.PartyEvents.Length;
+        var totalItems = overlay.Entries.Length + overlay.Notes.Length + overlay.PartyEvents.Length + overlay.SubmarineReturns.Length;
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
@@ -628,7 +676,20 @@ public sealed partial class CalendarWindow : Window
                     if (plugin.Configuration.HoverTextClickOpensEntry || totalItems == 1)
                         SelectEntry(row.Entry);
                     else
-                        ToggleDaySelection(overlay.Day, overlay.Entries, overlay.Notes, overlay.PartyEvents);
+                        ToggleDaySelection(overlay.Day, overlay.Entries, overlay.Notes, overlay.PartyEvents, overlay.SubmarineReturns);
+                }
+            }
+            else if (row.SubmarineReturn != null)
+            {
+                ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+                hoveredPreview = new DayHeroPreview(overlay.Day, SubmarineReturnedHeroAsset);
+
+                if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+                {
+                    if (plugin.Configuration.HoverTextClickOpensEntry || totalItems == 1)
+                        SelectSubmarineReturn(row.SubmarineReturn);
+                    else
+                        ToggleDaySelection(overlay.Day, overlay.Entries, overlay.Notes, overlay.PartyEvents, overlay.SubmarineReturns);
                 }
             }
         }
@@ -729,9 +790,9 @@ public sealed partial class CalendarWindow : Window
         drawList.AddText(min + new Vector2(iconSize.X + 7f * ImGuiHelpers.GlobalScale, (size.Y - ImGui.GetTextLineHeight()) * 0.5f), Color(1f, 0.82f, 0.42f, currentMonth ? 1f : 0.72f), text);
     }
 
-    private void DrawDayCornerIcons(IReadOnlyList<LodestoneEntryKind> kinds, int noteCount, Vector2 min, Vector2 max, bool currentMonth)
+    private void DrawDayCornerIcons(IReadOnlyList<LodestoneEntryKind> kinds, int noteCount, bool hasSubmarineReturn, Vector2 min, Vector2 max, bool currentMonth)
     {
-        if (kinds.Count == 0 && noteCount == 0)
+        if (kinds.Count == 0 && noteCount == 0 && !hasSubmarineReturn)
             return;
 
         var drawList = ImGui.GetWindowDrawList();
@@ -741,6 +802,12 @@ public sealed partial class CalendarWindow : Window
         var gap = 3f * scale;
         var x = max.X - padding - slot;
         var y = min.Y + padding;
+
+        if (hasSubmarineReturn)
+        {
+            DrawSubmarineCornerIcon(new Vector2(x, y), slot, currentMonth);
+            x -= slot + gap;
+        }
 
         foreach (var kind in kinds)
         {
@@ -1156,10 +1223,15 @@ public sealed partial class CalendarWindow : Window
         var showPartyEvents = plugin.Configuration.ShowPartyEvents;
         changed |= DrawPartyFilterToggle(ref showPartyEvents);
         plugin.Configuration.ShowPartyEvents = showPartyEvents;
+        ImGui.SameLine();
+        var showSubmarineReturns = plugin.Configuration.ShowSubmarineReturns;
+        changed |= DrawSubmarineFilterToggle(ref showSubmarineReturns);
+        plugin.Configuration.ShowSubmarineReturns = showSubmarineReturns;
 
         if (changed)
         {
             plugin.Configuration.Save();
+            plugin.SubmarineService.Refresh(force: true);
             _ = RefreshAsync(true);
         }
     }
@@ -1207,17 +1279,18 @@ public sealed partial class CalendarWindow : Window
 
         if (selectedDay != null)
         {
+            var day = selectedDay.Value;
             using var rounding = ImRaii.PushStyle(ImGuiStyleVar.FrameRounding, 7f);
             using var button = ImRaii.PushColor(ImGuiCol.Button, DetailPrimary);
             using var buttonHovered = ImRaii.PushColor(ImGuiCol.ButtonHovered, DetailAccent);
             using var buttonActive = ImRaii.PushColor(ImGuiCol.ButtonActive, new Vector4(0.32f, 0.16f, 0.62f, 1f));
 
-            var notes = GetNotesForDay(selectedDay.Value).ToArray();
+            var notes = GetNotesForDay(day).ToArray();
             if (ImGui.Button("Add note##dayWindowAddNote"))
-                OpenNoteEditor(selectedDay.Value, null);
+                OpenNoteEditor(day, null);
             ImGui.SameLine();
             if (ImGui.Button("Plan Party Event##dayWindowPlanParty"))
-                OpenPartyPlanner(selectedDay.Value, null);
+                OpenPartyPlanner(day, null);
 
             if (notes.Length > 0)
             {
@@ -1227,7 +1300,7 @@ public sealed partial class CalendarWindow : Window
                     DrawDayNoteTile(note);
             }
 
-            var partyEvents = GetPartyEventsForDay(selectedDay.Value).ToArray();
+            var partyEvents = GetPartyEventsForDay(day).ToArray();
             if (partyEvents.Length > 0)
             {
                 ImGui.Spacing();
@@ -1236,9 +1309,18 @@ public sealed partial class CalendarWindow : Window
                     DrawDayPartyEventTile(partyEvent);
             }
 
+            var submarineReturns = GetSubmarineReturnsForDay(day).ToArray();
+            if (submarineReturns.Length > 0)
+            {
+                ImGui.Spacing();
+                DrawDaySectionHeader(FontAwesomeIcon.Ship, "Submarine Returns", DetailBlue);
+                foreach (var submarineReturn in submarineReturns)
+                    DrawDaySubmarineReturnTile(submarineReturn);
+            }
+
             ImGui.Spacing();
             DrawDaySectionHeader(FontAwesomeIcon.Newspaper, "Lodestone", DetailMuted);
-            var dayEntries = GetEntriesForDay(selectedDay.Value).ToArray();
+            var dayEntries = GetEntriesForDay(day).ToArray();
             if (dayEntries.Length == 0)
                 ImGui.TextColored(DetailMuted, "No Lodestone entries for this day.");
             else
@@ -1501,6 +1583,7 @@ public sealed partial class CalendarWindow : Window
     {
         selectedEntry = entry;
         selectedPartyEvent = null;
+        selectedSubmarineReturn = null;
         detailWindowNeedsPlacement = true;
     }
 
@@ -1549,7 +1632,10 @@ public sealed partial class CalendarWindow : Window
             return;
 
         var open = true;
-        PrimeSideWindowPlacement(new Vector2(760, 720) * ImGuiHelpers.GlobalScale, ref detailWindowNeedsPlacement);
+        var scale = ImGuiHelpers.GlobalScale;
+        var maxHeight = Math.Max(420f * scale, ImGui.GetIO().DisplaySize.Y - 16f * scale);
+        var desiredHeight = Math.Clamp(calendarWindowSize.Y > 0 ? calendarWindowSize.Y : 720f * scale, 420f * scale, maxHeight);
+        PrimeSideWindowPlacement(new Vector2(760f * scale, desiredHeight), ref detailWindowNeedsPlacement);
         if (!ImGui.Begin($"Lodestone Details##{selectedEntry.Id}", ref open))
         {
             ImGui.End();
@@ -1636,10 +1722,8 @@ public sealed partial class CalendarWindow : Window
         draw.AddRectFilled(start, start + new Vector2(width, height), DetailPanelElevated, 8f * scale);
         draw.AddRect(start, start + new Vector2(width, height), DetailPanelPurple, 8f * scale, 0, 1.5f * scale);
 
-        ImGui.SetCursorScreenPos(start + new Vector2(14f, 9f) * scale);
-        using (ImRaii.PushFont(UiBuilder.IconFont))
-            ImGui.TextColored(KindTextColor(entry.Kind), KindIcon(entry.Kind).ToIconString());
-        ImGui.SameLine();
+        DrawDetailKindIcon(entry.Kind, start + new Vector2(14f, 10f) * scale, 22f * scale);
+        ImGui.SetCursorScreenPos(start + new Vector2(44f, 9f) * scale);
         ImGui.TextColored(DetailMuted, $"{KindLabel(entry.Kind)}  |  {entry.StartsAt:g}{(entry.EndsAt.HasValue ? $" - {entry.EndsAt.Value:g}" : string.Empty)}");
 
         ImGui.SetCursorScreenPos(start + new Vector2(14f, 35f) * scale);
@@ -1648,6 +1732,23 @@ public sealed partial class CalendarWindow : Window
         ImGui.SetWindowFontScale(1f);
 
         ImGui.SetCursorScreenPos(start + new Vector2(0f, height + 10f * scale));
+    }
+
+    private void DrawDetailKindIcon(LodestoneEntryKind kind, Vector2 min, float size)
+    {
+        var asset = DayWindowIconAsset(kind);
+        var texture = string.IsNullOrEmpty(asset) ? null : plugin.ImageCache.GetTexture(asset);
+        if (texture != null)
+        {
+            ImGui.GetWindowDrawList().AddImage(texture.Handle, min, min + new Vector2(size), Vector2.Zero, Vector2.One, Color(1f, 1f, 1f, 1f));
+            return;
+        }
+
+        using var font = ImRaii.PushFont(UiBuilder.IconFont);
+        var icon = KindIcon(kind).ToIconString();
+        var iconSize = ImGui.CalcTextSize(icon);
+        var pos = min + new Vector2((size - iconSize.X) * 0.5f, (size - iconSize.Y) * 0.5f);
+        ImGui.GetWindowDrawList().AddText(pos, ImGui.ColorConvertFloat4ToU32(KindTextColor(kind)), icon);
     }
 
     private void DrawDetailHero(LodestoneEntry entry)
@@ -1985,11 +2086,11 @@ public sealed partial class CalendarWindow : Window
         return R(r) | R(g) << 8 | R(b) << 16 | R(a) << 24;
     }
 
-    private sealed record DayHoverRow(string Text, uint Background, LodestoneEntry? Entry);
+    private sealed record DayHoverRow(string Text, uint Background, LodestoneEntry? Entry, SubmarineReturn? SubmarineReturn);
 
     private sealed record DayHeroPreview(DateTime Day, string HeroImageUrl);
 
-    private sealed record DayHoverOverlay(DateTime Day, Vector2 Min, Vector2 Max, CalendarNote[] Notes, PartyEvent[] PartyEvents, LodestoneEntry[] Entries, bool CurrentMonth)
+    private sealed record DayHoverOverlay(DateTime Day, Vector2 Min, Vector2 Max, CalendarNote[] Notes, PartyEvent[] PartyEvents, SubmarineReturn[] SubmarineReturns, LodestoneEntry[] Entries, bool CurrentMonth)
     {
         public Vector2 PopupMin { get; init; }
         public Vector2 PopupMax { get; init; }
@@ -2000,14 +2101,16 @@ public sealed partial class CalendarWindow : Window
         LodestoneEntry[] Entries,
         CalendarNote[] Notes,
         PartyEvent[] PartyEvents,
+        SubmarineReturn[] SubmarineReturns,
         string HeroImageUrl,
         string[] HeroImageCandidates,
         LodestoneEntryKind[] CornerKinds,
         bool HasMultiDayEvent,
         bool HasEventStart,
-        bool HasEventEnd)
+        bool HasEventEnd,
+        bool HasSubmarineReturn)
     {
-        public static readonly CalendarDayData Empty = new([], [], [], string.Empty, [], [], false, false, false);
+        public static readonly CalendarDayData Empty = new([], [], [], [], string.Empty, [], [], false, false, false, false);
     }
 
     private sealed record CalendarDayCache(CalendarDayCacheKey Key, Dictionary<DateTime, CalendarDayData> Data);
@@ -2026,6 +2129,8 @@ public sealed partial class CalendarWindow : Window
         bool ShowStatus,
         bool ShowRecovery,
         bool ShowPartyEvents,
+        bool ShowSubmarineReturns,
+        int SubmarineReturnsVersion,
         DateTime CurrentFutureCutoff,
         int HiddenEntrySignature,
         int NoteSignature,
@@ -2036,5 +2141,6 @@ public sealed partial class CalendarWindow : Window
         public List<LodestoneEntry> Entries { get; } = [];
         public List<CalendarNote> Notes { get; } = [];
         public List<PartyEvent> PartyEvents { get; } = [];
+        public List<SubmarineReturn> SubmarineReturns { get; } = [];
     }
 }

@@ -12,7 +12,7 @@ public class Configuration : IPluginConfiguration
     private static readonly Vector4 DefaultDayHighlightColor = new(0.70f, 0.55f, 0.30f, 0.55f);
     private static readonly Vector4 DefaultDayOfWeekColor = new(0.90f, 0.84f, 0.65f, 1f);
 
-    public int Version { get; set; } = 13;
+    public int Version { get; set; } = 14;
     public string Region { get; set; } = "na";
     public bool ShowEvents { get; set; } = true;
     public bool ShowTopics { get; set; } = true;
@@ -61,6 +61,7 @@ public class Configuration : IPluginConfiguration
     public float[] CalendarDayOfWeekColor { get; set; } = ColorArray(DefaultDayOfWeekColor);
     public bool UseFullDayNames { get; set; } = false;
     public bool ShowPartyEvents { get; set; } = true;
+    public bool ShowSubmarineReturns { get; set; } = true;
     public bool PartySyncEnabled { get; set; } = false;
     public bool PartySyncExternalBridgeEnabled { get; set; } = false;
     public string PartySyncSupabaseUrl { get; set; } = string.Empty;
@@ -186,6 +187,13 @@ public class Configuration : IPluginConfiguration
             PriorityRules?.RemoveAll(rule => rule.Id.Equals("maintenance_below_events", StringComparison.OrdinalIgnoreCase)
                                              || rule.Id.Equals("recovery_below_events", StringComparison.OrdinalIgnoreCase));
             Version = 13;
+            Save();
+        }
+
+        if (Version < 14)
+        {
+            ShowSubmarineReturns = true;
+            Version = 14;
             Save();
         }
 

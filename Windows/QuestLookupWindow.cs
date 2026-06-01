@@ -14,8 +14,8 @@ public sealed class QuestLookupWindow : Window, IDisposable
     private string query = string.Empty;
     private string status = "No quest loaded.";
     private bool loading;
-    private bool useVNav;
     private bool needsPlacement;
+    private DateTime keepFlagClipboardUntilUtc;
     private CancellationTokenSource? cancellationTokenSource;
 
     public QuestLookupWindow(Plugin plugin) : base("Quest Lookup##LodestoneQuestLookup")
@@ -41,7 +41,6 @@ public sealed class QuestLookupWindow : Window, IDisposable
         query = GuessQuestName(entry);
         status = string.IsNullOrWhiteSpace(query) ? "No quest name found for this Lodestone entry." : $"Looking up {query}...";
         loading = !string.IsNullOrWhiteSpace(query);
-        useVNav = false;
         needsPlacement = true;
         IsOpen = true;
 
@@ -61,6 +60,8 @@ public sealed class QuestLookupWindow : Window, IDisposable
 
     public override void Draw()
     {
+        KeepFlagClipboardFresh();
+
         using var rounding = ImRaii.PushStyle(ImGuiStyleVar.ChildRounding, 8f);
         using var frameRounding = ImRaii.PushStyle(ImGuiStyleVar.FrameRounding, 7f);
         using var tabColor = ImRaii.PushColor(ImGuiCol.Tab, new Vector4(0.42f, 0.22f, 0.78f, 0.92f));
@@ -127,7 +128,7 @@ public sealed class QuestLookupWindow : Window, IDisposable
             ImGui.SetWindowFontScale(1f);
 
             ImGui.Spacing();
-            ImGui.TextColored(new Vector4(0.68f, 0.66f, 0.78f, 1f), "Quest data was not available from Gamer Escape.");
+            ImGui.TextColored(new Vector4(0.68f, 0.66f, 0.78f, 1f), "Quest data was not available from Gamer Escape or ConsoleGamesWiki.");
             if (!string.IsNullOrWhiteSpace(query))
                 ImGui.TextColored(new Vector4(0.68f, 0.66f, 0.78f, 1f), $"Search term: {query}");
         });
@@ -136,6 +137,9 @@ public sealed class QuestLookupWindow : Window, IDisposable
         {
             if (ImGui.Button("Open Gamer Escape Search"))
                 Dalamud.Utility.Util.OpenLink($"https://ffxiv.gamerescape.com/wiki/Special:Search?search={Uri.EscapeDataString(query)}");
+            ImGui.SameLine();
+            if (ImGui.Button("Open ConsoleGamesWiki Search"))
+                Dalamud.Utility.Util.OpenLink($"https://ffxiv.consolegameswiki.com/wiki/Special:Search?search={Uri.EscapeDataString(query)}");
         }
     }
 
@@ -178,7 +182,7 @@ public sealed class QuestLookupWindow : Window, IDisposable
         {
             if (source.Success)
             {
-                ImGui.TextColored(new Vector4(0.68f, 0.66f, 0.78f, 1f), "Gamer Escape URL");
+                ImGui.TextColored(new Vector4(0.68f, 0.66f, 0.78f, 1f), $"{SourceLabel(item)} URL");
                 WrappedText(item.Url);
                 ImGui.TextColored(new Vector4(0.68f, 0.66f, 0.78f, 1f), $"Fetched: {item.FetchedAt:g}");
             }
@@ -230,8 +234,29 @@ public sealed class QuestLookupWindow : Window, IDisposable
 
     private void DrawActions(GameEscapeQuest item)
     {
-        if (ImGui.Button("Open Gamer Escape"))
+        if (ImGui.Button($"Open {SourceLabel(item)}"))
             Dalamud.Utility.Util.OpenLink(item.Url);
+
+        ImGui.SameLine();
+        var canCopyFlag = item.MapX.HasValue && item.MapY.HasValue && !string.IsNullOrWhiteSpace(item.Zone);
+        using (ImRaii.Disabled(!canCopyFlag))
+        {
+            if (ImGui.Button("Copy Flag"))
+            {
+                if (plugin.QuestNavigationService.TrySetMapFlag(item))
+                {
+                    CopyFlagToClipboard();
+                    status = "Copied <flag>. Paste it in chat.";
+                }
+                else
+                {
+                    status = plugin.QuestNavigationService.Status;
+                }
+            }
+        }
+
+        if (ImGui.IsItemHovered() && !canCopyFlag)
+            ImGui.SetTooltip("A parsed zone and X/Y coordinate are required to copy a map flag.");
 
         ImGui.SameLine();
         var canTeleport = item.HasLocation && plugin.QuestNavigationService.IsLifestreamAvailable();
@@ -239,19 +264,13 @@ public sealed class QuestLookupWindow : Window, IDisposable
         {
             if (ImGui.Button("Teleport"))
             {
-                var ok = plugin.QuestNavigationService.TeleportToQuest(item, useVNav && plugin.QuestNavigationService.IsVNavAvailable());
+                var ok = plugin.QuestNavigationService.TeleportToQuest(item, false);
                 status = ok ? "Teleport requested." : "Could not call Lifestream teleport.";
             }
         }
 
         if (ImGui.IsItemHovered() && !canTeleport)
             ImGui.SetTooltip(item.HasLocation ? "Lifestream IPC is not available." : "No quest location was parsed.");
-
-        if (item.MapX.HasValue && item.MapY.HasValue && !string.IsNullOrWhiteSpace(item.Zone) && plugin.QuestNavigationService.IsVNavAvailable())
-        {
-            ImGui.SameLine();
-            ImGui.Checkbox("Use VNAV to run to quest giver", ref useVNav);
-        }
 
         if (plugin.QuestNavigationService.HasPendingNavigation || !plugin.QuestNavigationService.Status.Equals("Navigation idle.", StringComparison.OrdinalIgnoreCase))
             ImGui.TextColored(new Vector4(0.68f, 0.66f, 0.78f, 1f), plugin.QuestNavigationService.Status);
@@ -267,6 +286,20 @@ public sealed class QuestLookupWindow : Window, IDisposable
         }
     }
 
+    private void CopyFlagToClipboard()
+    {
+        keepFlagClipboardUntilUtc = DateTime.UtcNow.AddSeconds(1);
+        ImGui.SetClipboardText("<flag>");
+    }
+
+    private void KeepFlagClipboardFresh()
+    {
+        if (keepFlagClipboardUntilUtc <= DateTime.UtcNow)
+            return;
+
+        ImGui.SetClipboardText("<flag>");
+    }
+
     private static void Section(string label, FontAwesomeIcon icon)
     {
         ImGui.Spacing();
@@ -275,6 +308,9 @@ public sealed class QuestLookupWindow : Window, IDisposable
         ImGui.SameLine();
         ImGui.TextColored(new Vector4(0.62f, 0.90f, 0.42f, 1f), label);
     }
+
+    private static string SourceLabel(GameEscapeQuest item)
+        => string.IsNullOrWhiteSpace(item.SourceName) ? "Quest Source" : item.SourceName;
 
     private static void DrawPanel(string id, Action drawContent)
     {

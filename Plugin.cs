@@ -21,6 +21,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IClientState ClientState { get; private set; } = null!;
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
+    [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
 
     private const string CommandName = "/lodestone";
 
@@ -32,6 +33,7 @@ public sealed class Plugin : IDalamudPlugin
     internal QuestNavigationService QuestNavigationService { get; }
     internal PartySyncService PartySyncService { get; }
     internal PartySyncIpcService PartySyncIpcService { get; }
+    internal SubmarineService SubmarineService { get; }
     internal CalendarWindow CalendarWindow { get; }
     internal ConfigWindow ConfigWindow { get; }
     internal QuestLookupWindow QuestLookupWindow { get; }
@@ -49,6 +51,7 @@ public sealed class Plugin : IDalamudPlugin
         QuestNavigationService = new QuestNavigationService(this);
         PartySyncService = new PartySyncService(this);
         PartySyncIpcService = new PartySyncIpcService(this);
+        SubmarineService = new SubmarineService(this);
         CalendarWindow = new CalendarWindow(this);
         ConfigWindow = new ConfigWindow(this);
         QuestLookupWindow = new QuestLookupWindow(this);
@@ -89,6 +92,7 @@ public sealed class Plugin : IDalamudPlugin
         QuestNavigationService.Dispose();
         PartySyncIpcService.Dispose();
         PartySyncService.Dispose();
+        SubmarineService.Dispose();
     }
 
     private void Draw() => WindowSystem.Draw();

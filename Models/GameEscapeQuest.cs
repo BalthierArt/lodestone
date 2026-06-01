@@ -5,6 +5,7 @@ public sealed class GameEscapeQuest
     public string Query { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string Url { get; set; } = string.Empty;
+    public string SourceName { get; set; } = "Gamer Escape";
     public string Acquisition { get; set; } = string.Empty;
     public string QuestGiver { get; set; } = string.Empty;
     public string Zone { get; set; } = string.Empty;
