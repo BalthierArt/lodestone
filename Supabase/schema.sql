@@ -10,8 +10,8 @@ create table if not exists public.lodestone_party_events (
   description text not null default '' check (char_length(description) <= 600),
   icon_key text not null default 'trial' check (char_length(icon_key) <= 40),
   creator_key text not null,
-  creator_name text not null check (char_length(creator_name) between 1 and 80),
-  creator_world text not null default '' check (char_length(creator_world) <= 40),
+  creator_name text not null check (char_length(creator_name) between 1 and 512),
+  creator_world text not null default '' check (char_length(creator_world) <= 512),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -20,8 +20,8 @@ create table if not exists public.lodestone_party_event_responses (
   event_id uuid not null references public.lodestone_party_events(id) on delete cascade,
   party_hash text not null,
   player_key text not null,
-  player_name text not null check (char_length(player_name) between 1 and 80),
-  player_world text not null default '' check (char_length(player_world) <= 40),
+  player_name text not null check (char_length(player_name) between 1 and 512),
+  player_world text not null default '' check (char_length(player_world) <= 512),
   status text not null check (status in ('interested', 'maybe')),
   updated_at timestamptz not null default now(),
   primary key (event_id, player_key)
@@ -32,6 +32,18 @@ create index if not exists idx_lodestone_party_events_party_date
 
 create index if not exists idx_lodestone_party_responses_party_event
   on public.lodestone_party_event_responses(party_hash, event_id);
+
+alter table public.lodestone_party_events
+  drop constraint if exists lodestone_party_events_creator_name_check,
+  drop constraint if exists lodestone_party_events_creator_world_check,
+  add constraint lodestone_party_events_creator_name_check check (char_length(creator_name) between 1 and 512),
+  add constraint lodestone_party_events_creator_world_check check (char_length(creator_world) <= 512);
+
+alter table public.lodestone_party_event_responses
+  drop constraint if exists lodestone_party_event_responses_player_name_check,
+  drop constraint if exists lodestone_party_event_responses_player_world_check,
+  add constraint lodestone_party_event_responses_player_name_check check (char_length(player_name) between 1 and 512),
+  add constraint lodestone_party_event_responses_player_world_check check (char_length(player_world) <= 512);
 
 alter table public.lodestone_party_events enable row level security;
 alter table public.lodestone_party_event_responses enable row level security;

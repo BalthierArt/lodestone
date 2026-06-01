@@ -51,12 +51,14 @@ public sealed class SupabasePartySyncTransport : IPartySyncTransport
                                 && !string.IsNullOrWhiteSpace(plugin.Configuration.PartySyncAnonKey)
                                 && !string.IsNullOrWhiteSpace(plugin.Configuration.PartySyncKey);
 
+    private string PartyKey => plugin.Configuration.PartySyncKey.Trim();
+
     public async Task<IReadOnlyList<PartyEvent>> ListAsync(DateTime start, DateTime end, bool force)
     {
         var response = await SendAsync<ListResponse>(new SyncEnvelope
         {
             Action = "list",
-            PartyKey = plugin.Configuration.PartySyncKey.Trim(),
+            PartyHash = PartySyncCrypto.PartyHash(PartyKey),
             RangeStart = start.ToString("yyyy-MM-dd"),
             RangeEnd = end.ToString("yyyy-MM-dd")
         });
@@ -71,8 +73,8 @@ public sealed class SupabasePartySyncTransport : IPartySyncTransport
         var response = await SendAsync<EventResponse>(new SyncEnvelope
         {
             Action = "upsertEvent",
-            PartyKey = plugin.Configuration.PartySyncKey.Trim(),
-            Actor = actor,
+            PartyHash = PartySyncCrypto.PartyHash(PartyKey),
+            Actor = PartySyncActorDto.From(actor, PartyKey),
             Event = FromModel(partyEvent, actor)
         });
 
@@ -85,8 +87,8 @@ public sealed class SupabasePartySyncTransport : IPartySyncTransport
         var response = await SendAsync<EventResponse>(new SyncEnvelope
         {
             Action = "respond",
-            PartyKey = plugin.Configuration.PartySyncKey.Trim(),
-            Actor = actor,
+            PartyHash = PartySyncCrypto.PartyHash(PartyKey),
+            Actor = PartySyncActorDto.From(actor, PartyKey),
             EventId = partyEvent.Id,
             ResponseStatus = status.HasValue ? ToWireStatus(status.Value) : "remove"
         });
@@ -100,8 +102,8 @@ public sealed class SupabasePartySyncTransport : IPartySyncTransport
         await SendAsync<OkResponse>(new SyncEnvelope
         {
             Action = "deleteEvent",
-            PartyKey = plugin.Configuration.PartySyncKey.Trim(),
-            Actor = actor,
+            PartyHash = PartySyncCrypto.PartyHash(PartyKey),
+            Actor = PartySyncActorDto.From(actor, PartyKey),
             EventId = partyEvent.Id
         });
 
@@ -136,11 +138,12 @@ public sealed class SupabasePartySyncTransport : IPartySyncTransport
         return $"{baseUrl}/functions/v1/lodestone-party-sync";
     }
 
-    private static PartyEvent ToModel(PartyEventDto dto)
+    private PartyEvent ToModel(PartyEventDto dto)
     {
         _ = DateTime.TryParse(dto.Date, out var date);
         _ = DateTime.TryParse(dto.CreatedAt, out var createdAt);
         _ = DateTime.TryParse(dto.UpdatedAt, out var updatedAt);
+        var partyKey = PartyKey;
 
         return new PartyEvent
         {
@@ -151,28 +154,29 @@ public sealed class SupabasePartySyncTransport : IPartySyncTransport
             Title = dto.Title ?? string.Empty,
             Description = dto.Description ?? string.Empty,
             IconKey = string.IsNullOrWhiteSpace(dto.IconKey) ? PartyEventIcons.DefaultKey : dto.IconKey!,
-            CreatorName = dto.CreatorName ?? string.Empty,
-            CreatorWorld = dto.CreatorWorld ?? string.Empty,
+            CreatorName = PartySyncCrypto.DecryptDisplayValue(dto.CreatorName, partyKey, "creator-name"),
+            CreatorWorld = PartySyncCrypto.DecryptDisplayValue(dto.CreatorWorld, partyKey, "creator-world"),
             CreatedAt = createdAt == default ? DateTime.UtcNow : createdAt,
             UpdatedAt = updatedAt == default ? DateTime.UtcNow : updatedAt,
             Responses = dto.Responses.Select(ToModel).ToList()
         };
     }
 
-    private static PartyEventResponse ToModel(PartyResponseDto dto)
+    private PartyEventResponse ToModel(PartyResponseDto dto)
     {
         _ = DateTime.TryParse(dto.UpdatedAt, out var updatedAt);
+        var partyKey = PartyKey;
         return new PartyEventResponse
         {
             PlayerKey = dto.PlayerKey ?? string.Empty,
-            PlayerName = dto.PlayerName ?? string.Empty,
-            PlayerWorld = dto.PlayerWorld ?? string.Empty,
+            PlayerName = PartySyncCrypto.DecryptDisplayValue(dto.PlayerName, partyKey, "player-name"),
+            PlayerWorld = PartySyncCrypto.DecryptDisplayValue(dto.PlayerWorld, partyKey, "player-world"),
             Status = FromWireStatus(dto.Status),
             UpdatedAt = updatedAt == default ? DateTime.UtcNow : updatedAt
         };
     }
 
-    private static PartyEventDto FromModel(PartyEvent model, PartySyncActor actor)
+    private PartyEventDto FromModel(PartyEvent model, PartySyncActor actor)
         => new()
         {
             Id = string.IsNullOrWhiteSpace(model.Id) ? null : model.Id,
@@ -182,8 +186,8 @@ public sealed class SupabasePartySyncTransport : IPartySyncTransport
             Title = model.Title,
             Description = model.Description,
             IconKey = PartyEventIcons.Get(model.IconKey).Key,
-            CreatorName = actor.Name,
-            CreatorWorld = actor.World
+            CreatorName = PartySyncCrypto.EncryptDisplayValue(actor.Name, PartyKey, "creator-name"),
+            CreatorWorld = PartySyncCrypto.EncryptDisplayValue(actor.World, PartyKey, "creator-world")
         };
 
     private static PartyEventResponseStatus FromWireStatus(string? status)
@@ -199,13 +203,28 @@ public sealed class SupabasePartySyncTransport : IPartySyncTransport
     private sealed class SyncEnvelope
     {
         public string Action { get; set; } = string.Empty;
-        public string PartyKey { get; set; } = string.Empty;
+        public string PartyHash { get; set; } = string.Empty;
         public string? RangeStart { get; set; }
         public string? RangeEnd { get; set; }
         public string? EventId { get; set; }
         public string? ResponseStatus { get; set; }
-        public PartySyncActor? Actor { get; set; }
+        public PartySyncActorDto? Actor { get; set; }
         public PartyEventDto? Event { get; set; }
+    }
+
+    private sealed class PartySyncActorDto
+    {
+        public string Key { get; set; } = string.Empty;
+        public string NameEncrypted { get; set; } = string.Empty;
+        public string WorldEncrypted { get; set; } = string.Empty;
+
+        public static PartySyncActorDto From(PartySyncActor actor, string partyKey)
+            => new()
+            {
+                Key = actor.Key,
+                NameEncrypted = PartySyncCrypto.EncryptDisplayValue(actor.Name, partyKey, "player-name"),
+                WorldEncrypted = PartySyncCrypto.EncryptDisplayValue(actor.World, partyKey, "player-world")
+            };
     }
 
     private sealed class ListResponse

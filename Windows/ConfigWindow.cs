@@ -435,7 +435,7 @@ public sealed class ConfigWindow : Window
             SectionHeader(FontAwesomeIcon.Users, "What it does", White());
             TextWrappedColored(White(), "Party Sync is for player-made calendar plans: raid nights, trial farms, map nights, hunts, gathering routes, or anything your group wants to coordinate.");
             TextWrappedColored(White(), "Right-click a calendar day and choose Plan Party Event. Everyone using the same Supabase party key, or the same external bridge group, can see the event, open it, and mark Interested, Maybe, or Remove.");
-            TextWrappedColored(Muted, "Local notes stay local. Lodestone scrape data stays local. The shared service only stores party events and sign-up responses.");
+            TextWrappedColored(Muted, "Local notes stay local. Lodestone scrape data stays local. Supabase mode stores party events and sign-up responses, with player display names encrypted by your Party key before upload.");
         });
 
         ContentBox("partySyncStatus", PanelBlue, true, () =>
@@ -443,7 +443,7 @@ public sealed class ConfigWindow : Window
             SectionHeader(FontAwesomeIcon.Cloud, "Sync connection", White());
             TextWrappedColored(White(), $"Transport: {plugin.PartySyncService.TransportLabel}");
             TextWrappedColored(White(), plugin.PartySyncService.Status);
-            TextWrappedColored(Muted, "Built-in sharing uses a Supabase Edge Function named lodestone-party-sync. External IPC Bridge mode lets another sync plugin use its own group/key instead, so players do not need a second Lodestone party key.");
+            TextWrappedColored(Muted, "Built-in sharing uses a Supabase Edge Function named lodestone-party-sync. The Party key stays client-side for new clients; Supabase receives a hash for routing and encrypted display names. External IPC Bridge mode lets another sync plugin use its own group/key instead.");
         });
 
         ContentBox("partySyncSettings", Panel, false, () =>

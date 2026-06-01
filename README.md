@@ -70,7 +70,7 @@ Party Sync is experimental and still an ongoing project. It is built to support 
 
 Supabase is a small cloud database/backend service. In simple terms, it is a shared online box where Lodestone can store party events for a group key.
 
-If you use Supabase mode, Lodestone can upload and download shared party events directly through that backend. It does not upload your local notes or scraped Lodestone calendar data.
+If you use Supabase mode, Lodestone can upload and download shared party events directly through that backend. It does not upload your local notes or scraped Lodestone calendar data. Player display names and worlds are encrypted before upload, so the Supabase tables do not contain a readable list of names.
 
 ### Party Sync Option 2: Mod Sync Plugins
 
@@ -104,4 +104,4 @@ The settings window lets you adjust how the calendar feels:
 
 Lodestone Calendar reads public Lodestone pages and stores a local cache so it does not need to scan constantly. The default refresh interval is once every 24 hours.
 
-Personal notes stay local. Party events are only shared if you enable a Party Sync option.
+Personal notes stay local. Party events are only shared if you enable a Party Sync option. In Supabase mode, people with the same Party key can still see each other's display names in game, but the database stores those display names as encrypted text.

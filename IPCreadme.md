@@ -14,6 +14,8 @@ Important: IPC is local to the player's client. Another plugin must still call L
 
 When External IPC Bridge is enabled, Lodestone does not require its own separate Party Key. The bridge plugin can use its own existing group/key system.
 
+Supabase mode encrypts player display names before upload. IPC mode returns the display names Lodestone shows in game, so bridge plugins should treat these payloads as group-private data and apply their own transport privacy rules.
+
 ## IPC Providers
 
 `Lodestone.PartySync.ApiVersion`

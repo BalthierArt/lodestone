@@ -7,6 +7,8 @@ type Actor = {
   key?: string;
   name?: string;
   world?: string;
+  nameEncrypted?: string;
+  worldEncrypted?: string;
 };
 
 type PartyEventInput = {
@@ -33,8 +35,7 @@ Deno.serve(async (req) => {
 
     const body = await req.json();
     const action = String(body.action ?? "");
-    const partyKey = assertString(body.partyKey, "partyKey", 4, 128);
-    const partyHash = await sha256(partyKey);
+    const partyHash = await normalizePartyHash(body);
 
     switch (action) {
       case "list":
@@ -89,8 +90,8 @@ async function upsertEvent(partyHash: string, actorInput: unknown, eventInput: u
           title: event.title,
           description: event.description,
           icon_key: event.icon_key,
-          creator_name: actor.name,
-          creator_world: actor.world,
+          creator_name: event.creator_name,
+          creator_world: event.creator_world,
           updated_at: now,
         }),
       },
@@ -110,8 +111,8 @@ async function upsertEvent(partyHash: string, actorInput: unknown, eventInput: u
       description: event.description,
       icon_key: event.icon_key,
       creator_key: actor.key,
-      creator_name: actor.name,
-      creator_world: actor.world,
+      creator_name: event.creator_name,
+      creator_world: event.creator_world,
       created_at: now,
       updated_at: now,
     }),
@@ -147,8 +148,8 @@ async function respond(partyHash: string, actorInput: unknown, eventIdInput: unk
       event_id: eventId,
       party_hash: partyHash,
       player_key: actor.key,
-      player_name: actor.name,
-      player_world: actor.world,
+      player_name: actor.name_encrypted,
+      player_world: actor.world_encrypted,
       status,
       updated_at: new Date().toISOString(),
     }),
@@ -246,14 +247,19 @@ async function rest(path: string, init: RequestInit = {}) {
 
 function normalizeActor(input: unknown) {
   const actor = input as Actor;
+  const nameEncrypted = optionalString(actor?.nameEncrypted ?? actor?.name, 512);
+  if (!nameEncrypted) {
+    throw new Error("actor.nameEncrypted is required.");
+  }
+
   return {
     key: assertString(actor?.key, "actor.key", 16, 128),
-    name: assertString(actor?.name, "actor.name", 1, 80),
-    world: optionalString(actor?.world, 40),
+    name_encrypted: nameEncrypted,
+    world_encrypted: optionalString(actor?.worldEncrypted ?? actor?.world, 512),
   };
 }
 
-function normalizeEvent(input: unknown, actor: { name: string; world: string }) {
+function normalizeEvent(input: unknown, actor: { name_encrypted: string; world_encrypted: string }) {
   const event = input as PartyEventInput;
   return {
     id: optionalString(event?.id, 80) || null,
@@ -263,9 +269,22 @@ function normalizeEvent(input: unknown, actor: { name: string; world: string }) 
     title: assertString(event?.title, "event.title", 1, 160),
     description: optionalString(event?.description, 600),
     icon_key: optionalString(event?.iconKey, 40) || "trial",
-    creator_name: actor.name,
-    creator_world: actor.world,
+    creator_name: optionalString(event?.creatorName, 512) || actor.name_encrypted,
+    creator_world: optionalString(event?.creatorWorld, 512) || actor.world_encrypted,
   };
+}
+
+async function normalizePartyHash(body: Record<string, unknown>) {
+  const partyHash = optionalString(body.partyHash, 128).toLowerCase();
+  if (partyHash) {
+    if (!/^[a-f0-9]{64}$/.test(partyHash)) {
+      throw new Error("partyHash must be a SHA-256 hex string.");
+    }
+    return partyHash;
+  }
+
+  const partyKey = assertString(body.partyKey, "partyKey", 4, 128);
+  return sha256(partyKey);
 }
 
 function assertString(value: unknown, name: string, min: number, max: number) {

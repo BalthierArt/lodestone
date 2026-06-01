@@ -13,7 +13,17 @@ Party sync uses a Supabase Edge Function so the Dalamud plugin only needs your p
    - Supabase anon key
    - Party key
 
-The shared party key behaves like an invite link: anyone who knows it can see and update events for that key. The database stores a SHA-256 hash of the party key, party event rows, and RSVP rows.
+The shared party key behaves like an invite link: anyone who knows it can see and update events for that key. New clients send a SHA-256 hash of the party key to the Edge Function, while the raw Party key stays client-side and is used to encrypt/decrypt display names.
+
+Supabase stores party event rows and RSVP rows, but player display names and worlds are written as encrypted text. Players using the same Party key can still see names in game; the Supabase tables should not contain a readable list of character names.
+
+If you used Party Sync before encrypted display names were added, old rows may still contain readable names. After deploying the updated function and schema, delete the old test rows if you do not want them retained:
+
+```sql
+delete from public.lodestone_party_events;
+```
+
+Responses are deleted automatically because they reference the event rows.
 
 ## IPC Bridge Notes
 
