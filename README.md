@@ -1,6 +1,14 @@
 # Lodestone Calendar
 
+<p align="center">
+  <img src="icon.png" alt="Lodestone Calendar icon" width="160" />
+</p>
+
 Lodestone Calendar is a Dalamud plugin that scans the official Final Fantasy XIV Lodestone and presents events, topics, notices, maintenance, recovery, status, and update posts in an in-game calendar.
+
+## Preview
+
+![Lodestone Calendar month view](preview.png)
 
 ## Party Sync
 
