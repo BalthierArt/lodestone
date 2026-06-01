@@ -1,0 +1,12 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Authors>foxho</Authors>
+    <Version>0.1.0.0</Version>
+    <PackageProjectUrl>https://na.finalfantasyxiv.com/lodestone/</PackageProjectUrl>
+    <Description>Lodestone event calendar with image-backed day cells.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="Assets\*.png" CopyToOutputDirectory="Always" />
+    <Content Include="icon.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

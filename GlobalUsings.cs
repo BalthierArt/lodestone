@@ -1,0 +1,11 @@
+global using System;
+global using System.Collections.Generic;
+global using System.IO;
+global using System.Linq;
+global using System.Net.Http;
+global using System.Numerics;
+global using System.Text.RegularExpressions;
+global using System.Threading;
+global using System.Threading.Tasks;
+global using Dalamud.Bindings.ImGui;
+global using Dalamud.Interface.Utility.Raii;
