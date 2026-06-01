@@ -5,7 +5,7 @@
   "Punchline": "A Lodestone-powered event calendar.",
   "Description": "Shows FFXIV Lodestone events, topics, notices, maintenance, and updates in an in-game calendar with Lodestone images.",
   "IconUrl": "icon.png",
-  "RepoUrl": "https://github.com/BalthierArt/Lodestone",
+  "RepoUrl": "https://github.com/BalthierArt/lodestone",
   "ApplicableVersion": "any",
   "Tags": [
     "lodestone",
