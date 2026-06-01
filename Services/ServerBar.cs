@@ -120,7 +120,7 @@ public sealed class ServerBar : IDisposable
         entry.Tooltip = BuildTooltip(currentEntries, currentNotes, currentPartyEvents, maintenanceWarnings);
     }
 
-    private static SeString? BuildTooltip(IReadOnlyList<LodestoneEntry> currentEntries, IReadOnlyList<CalendarNote> currentNotes, IReadOnlyList<PartyEvent> currentPartyEvents, IReadOnlyList<LodestoneEntry> maintenanceWarnings)
+    private SeString? BuildTooltip(IReadOnlyList<LodestoneEntry> currentEntries, IReadOnlyList<CalendarNote> currentNotes, IReadOnlyList<PartyEvent> currentPartyEvents, IReadOnlyList<LodestoneEntry> maintenanceWarnings)
     {
         var tooltip = new SeStringBuilder();
 
@@ -207,10 +207,15 @@ public sealed class ServerBar : IDisposable
         return $"{entry.StartsAt:g} - {entry.EffectiveEnd:g}";
     }
 
-    private static string NoteLabel(CalendarNote note)
+    private string NoteLabel(CalendarNote note)
         => note.ScheduledAt is { } scheduledAt
-            ? $"{scheduledAt:t} {note.Text}"
+            ? $"{FormatNoteTime(scheduledAt)} {note.Text}"
             : note.Text;
+
+    private string FormatNoteTime(DateTime scheduledAt)
+        => plugin.Configuration.UseTwelveHourNoteTimes
+            ? scheduledAt.ToString("h:mm tt")
+            : scheduledAt.ToString("HH:mm");
 
     private static string PartyEventLabel(PartyEvent partyEvent)
         => partyEvent.ScheduledAt is { } scheduledAt

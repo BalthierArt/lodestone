@@ -22,7 +22,7 @@ public sealed partial class LodestoneClient : IDisposable
 
     public LodestoneClient(DirectoryInfo configDirectory)
     {
-        cacheFile = new FileInfo(Path.Combine(configDirectory.FullName, "lodestone-cache-v5.json"));
+        cacheFile = new FileInfo(Path.Combine(configDirectory.FullName, "lodestone-cache-v6.json"));
         httpClient.Timeout = TimeSpan.FromSeconds(30);
         httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("LodestoneDalamudPlugin/0.1");
     }
@@ -353,8 +353,9 @@ public sealed partial class LodestoneClient : IDisposable
         var times = MaintenanceWindowRegex().Match(text);
         if (times.Success)
         {
-            entry.StartsAt = ParseMaintenanceDate(times.Groups["start"].Value);
-            entry.EndsAt = ParseMaintenanceDate(times.Groups["end"].Value);
+            var timezone = times.Groups["tz"].Value;
+            entry.StartsAt = ParseMaintenanceDate(times.Groups["start"].Value, timezone);
+            entry.EndsAt = ParseMaintenanceDate(times.Groups["end"].Value, timezone);
         }
 
         var articleSummary = CleanArticleText(articleHtml);
@@ -674,7 +675,7 @@ public sealed partial class LodestoneClient : IDisposable
             : DateTime.Now;
     }
 
-    private static DateTime ParseMaintenanceDate(string value)
+    private static DateTime ParseMaintenanceDate(string value, string timezone)
     {
         var normalized = NormalizeMeridiem(value)
             .Replace("Jan.", "Jan", StringComparison.OrdinalIgnoreCase)
@@ -690,9 +691,57 @@ public sealed partial class LodestoneClient : IDisposable
             .Replace("Dec.", "Dec", StringComparison.OrdinalIgnoreCase)
             .Trim();
 
-        return DateTime.TryParseExact(normalized, "MMM d, yyyy h:mm tt", CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var parsed)
-            ? parsed
-            : DateTime.Now;
+        if (!DateTime.TryParseExact(normalized, "MMM d, yyyy h:mm tt", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+            return DateTime.Now;
+
+        return ConvertSourceTimeToLocal(parsed, timezone);
+    }
+
+    private static DateTime ConvertSourceTimeToLocal(DateTime sourceTime, string timezone)
+    {
+        var sourceZone = ResolveTimeZone(timezone);
+        if (sourceZone == null)
+            return DateTime.SpecifyKind(sourceTime, DateTimeKind.Local);
+
+        try
+        {
+            return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sourceTime, DateTimeKind.Unspecified), sourceZone).ToLocalTime();
+        }
+        catch
+        {
+            return DateTime.SpecifyKind(sourceTime, DateTimeKind.Local);
+        }
+    }
+
+    private static TimeZoneInfo? ResolveTimeZone(string timezone)
+    {
+        var normalized = timezone.Trim();
+        if (normalized.Contains("PDT", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("PST", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("Pacific", StringComparison.OrdinalIgnoreCase))
+            return FindTimeZone("Pacific Standard Time", "America/Los_Angeles");
+
+        if (normalized.Contains("UTC", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("GMT", StringComparison.OrdinalIgnoreCase))
+            return TimeZoneInfo.Utc;
+
+        return null;
+    }
+
+    private static TimeZoneInfo? FindTimeZone(params string[] ids)
+    {
+        foreach (var id in ids)
+        {
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById(id);
+            }
+            catch
+            {
+            }
+        }
+
+        return null;
     }
 
     private static string NormalizeMeridiem(string value)
@@ -815,7 +864,7 @@ public sealed partial class LodestoneClient : IDisposable
     private static partial Regex SpecialScheduleRegex();
     [GeneratedRegex("Level\\s+(?<req>\\d+)|Players must first complete the quest\\s+\"(?<req>[^\"]+)\"", RegexOptions.IgnoreCase)]
     private static partial Regex RequirementRegex();
-    [GeneratedRegex("(?<start>[A-Z][a-z]{2}\\.\\s+\\d{1,2},\\s+\\d{4}\\s+\\d{1,2}:\\d{2}\\s+[ap]\\.m\\.)\\s+to\\s+(?<end>[A-Z][a-z]{2}\\.\\s+\\d{1,2},\\s+\\d{4}\\s+\\d{1,2}:\\d{2}\\s+[ap]\\.m\\.)\\s+\\([^)]+\\)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("(?<start>[A-Z][a-z]{2}\\.\\s+\\d{1,2},\\s+\\d{4}\\s+\\d{1,2}:\\d{2}\\s+[ap]\\.m\\.)\\s+to\\s+(?<end>[A-Z][a-z]{2}\\.\\s+\\d{1,2},\\s+\\d{4}\\s+\\d{1,2}:\\d{2}\\s+[ap]\\.m\\.)\\s+\\((?<tz>[^)]+)\\)", RegexOptions.IgnoreCase)]
     private static partial Regex MaintenanceWindowRegex();
     [GeneratedRegex("<script.*?</script>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex ScriptRegex();

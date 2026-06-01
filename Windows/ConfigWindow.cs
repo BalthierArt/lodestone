@@ -262,6 +262,7 @@ public sealed class ConfigWindow : Window
         {
             SectionHeader(FontAwesomeIcon.StickyNote, "Notes & alarms", White());
             DrawCheckbox("Enable note alarms", "Shows a Dalamud notification before timed player notes.", plugin.Configuration.EnableNoteAlarms, v => plugin.Configuration.EnableNoteAlarms = v);
+            DrawCheckbox("Use 12-hour note times", "Shows note alarm times as 9:00 PM instead of 21:00.", plugin.Configuration.UseTwelveHourNoteTimes, v => plugin.Configuration.UseTwelveHourNoteTimes = v);
             DrawAlarmWarningCombo();
             TextWrappedColored(White(), $"Saved notes: {plugin.Configuration.Notes.Count}");
         });
@@ -551,6 +552,12 @@ public sealed class ConfigWindow : Window
             ImGui.SameLine();
             if (PanelButton("Open config folder##aboutOpenConfig", PanelTeal, new Vector2(160, 0)))
                 Dalamud.Utility.Util.OpenLink(Plugin.PluginInterface.ConfigDirectory.FullName);
+        });
+
+        ContentBox("aboutThanks", Panel, true, () =>
+        {
+            SectionHeader(FontAwesomeIcon.Heart, "Thanks", White());
+            TextWrappedColored(White(), "This was inspired by Eventy, and I still 100% recommend it. Eventy is clean, fast, and straight to the point for events. I just wanted FFXIV to have a WoW-like calendar.");
         });
     }
 

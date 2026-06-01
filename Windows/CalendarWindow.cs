@@ -45,6 +45,7 @@ public sealed partial class CalendarWindow : Window
     private bool noteEditorHasTime;
     private int noteEditorHour = 21;
     private int noteEditorMinute;
+    private bool noteEditorIsPm = true;
     private bool noteEditorAlarmEnabled = true;
     private bool showAgenda;
     private bool refreshInProgress;
@@ -444,7 +445,6 @@ public sealed partial class CalendarWindow : Window
             drawList.AddRectFilled(ribbonMin, ribbonMax, KindColor(LodestoneEntryKind.SpecialEvent), 1f);
         }
 
-        DrawEventBoundaryMarkers(data.HasEventStart, data.HasEventEnd, min, max, currentMonth);
         var submarineHeroShown = plugin.Configuration.ShowDayImages && string.Equals(heroImageUrl, SubmarineReturnedHeroAsset, StringComparison.OrdinalIgnoreCase);
         DrawSubmarineReturnMarker(data.HasSubmarineReturn && !submarineHeroShown, data.HasEventStart || data.HasEventEnd, min, max, currentMonth);
 
@@ -453,6 +453,7 @@ public sealed partial class CalendarWindow : Window
 
         DrawDayCornerIcons(data.CornerKinds, dayNotes.Length, data.HasSubmarineReturn, min, max, currentMonth);
         DrawPartyEventCenterIcon(partyEvents, min, max, currentMonth);
+        DrawEventBoundaryMarkers(data.HasEventStart, data.HasEventEnd, min, max, currentMonth);
 
         var deferHoverText = plugin.Configuration.ShowCalendarTextOnHoverOnly && (dayHovered || overlayHovered);
         if (deferHoverText)
@@ -747,29 +748,27 @@ public sealed partial class CalendarWindow : Window
         var scale = ImGuiHelpers.GlobalScale;
         var drawList = ImGui.GetWindowDrawList();
         var count = hasStart && hasEnd ? 2 : 1;
-        var gap = 4f * scale;
-        var availableWidth = Math.Max(40f * scale, max.X - min.X - 12f * scale);
-        var markerWidth = Math.Min(88f * scale, (availableWidth - gap * (count - 1)) / count);
-        var markerHeight = 18f * scale;
-        var totalWidth = markerWidth * count + gap * (count - 1);
-        var x = min.X + (max.X - min.X - totalWidth) * 0.5f;
-        var y = max.Y - 25f * scale;
+        var gap = 6f * scale;
+        var startSize = new Vector2(80f, 80f) * scale;
+        var endSize = new Vector2(96f, 60f) * scale;
+        var totalWidth = (hasStart ? startSize.X : 0f) + (hasEnd ? endSize.X : 0f) + gap * (count - 1);
+        var center = (min + max) * 0.5f;
+        var x = center.X - totalWidth * 0.5f;
 
         if (hasStart)
         {
-            DrawEventBoundaryMarker(EventStartMarkerAsset, "EVENT START", FontAwesomeIcon.PlayCircle, new Vector2(x, y), new Vector2(markerWidth, markerHeight), currentMonth);
-            x += markerWidth + gap;
+            DrawEventBoundaryMarker(EventStartMarkerAsset, "START", FontAwesomeIcon.PlayCircle, new Vector2(x, center.Y - startSize.Y * 0.5f), startSize, currentMonth);
+            x += startSize.X + gap;
         }
 
         if (hasEnd)
-            DrawEventBoundaryMarker(EventEndMarkerAsset, "EVENT END", FontAwesomeIcon.FlagCheckered, new Vector2(x, y), new Vector2(markerWidth, markerHeight), currentMonth);
+            DrawEventBoundaryMarker(EventEndMarkerAsset, "END", FontAwesomeIcon.FlagCheckered, new Vector2(x, center.Y - endSize.Y * 0.5f), endSize, currentMonth);
     }
 
     private void DrawEventBoundaryMarker(string asset, string fallbackText, FontAwesomeIcon fallbackIcon, Vector2 min, Vector2 size, bool currentMonth)
     {
         var max = min + size;
         var drawList = ImGui.GetWindowDrawList();
-        drawList.AddRectFilled(min, max, Color(0f, 0f, 0f, currentMonth ? 0.68f : 0.48f), 3f * ImGuiHelpers.GlobalScale);
 
         var texture = plugin.ImageCache.GetTexture(asset);
         if (texture != null)
@@ -1447,6 +1446,7 @@ public sealed partial class CalendarWindow : Window
         noteEditorHasTime = note?.HasTime ?? false;
         noteEditorHour = note?.Hour ?? 21;
         noteEditorMinute = note?.Minute ?? 0;
+        noteEditorIsPm = noteEditorHour >= 12;
         noteEditorAlarmEnabled = note?.AlarmEnabled ?? true;
         noteWindowNeedsPlacement = true;
         noteEditorOpen = true;
@@ -1526,15 +1526,48 @@ public sealed partial class CalendarWindow : Window
         ImGui.Checkbox("Set time", ref noteEditorHasTime);
         if (noteEditorHasTime)
         {
-            ImGui.SetNextItemWidth(90f * scale);
-            ImGui.InputInt("Hour##noteHour", ref noteEditorHour);
-            ImGui.SameLine();
-            ImGui.SetNextItemWidth(90f * scale);
-            ImGui.InputInt("Minute##noteMinute", ref noteEditorMinute);
-            noteEditorHour = Math.Clamp(noteEditorHour, 0, 23);
-            noteEditorMinute = Math.Clamp(noteEditorMinute, 0, 59);
+            DrawNoteTimeEditor(scale);
             ImGui.Checkbox("Alarm enabled", ref noteEditorAlarmEnabled);
         }
+    }
+
+    private void DrawNoteTimeEditor(float scale)
+    {
+        if (plugin.Configuration.UseTwelveHourNoteTimes)
+        {
+            var displayHour = ToTwelveHour(noteEditorHour);
+            ImGui.SetNextItemWidth(90f * scale);
+            if (ImGui.InputInt("Hour##noteHour12", ref displayHour))
+            {
+                displayHour = Math.Clamp(displayHour, 1, 12);
+                noteEditorHour = FromTwelveHour(displayHour, noteEditorIsPm);
+            }
+
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(90f * scale);
+            ImGui.InputInt("Minute##noteMinute12", ref noteEditorMinute);
+            noteEditorMinute = Math.Clamp(noteEditorMinute, 0, 59);
+
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(78f * scale);
+            var meridiem = noteEditorIsPm ? 1 : 0;
+            if (ImGui.Combo("##noteMeridiem", ref meridiem, "AM\0PM\0"))
+            {
+                noteEditorIsPm = meridiem == 1;
+                noteEditorHour = FromTwelveHour(displayHour, noteEditorIsPm);
+            }
+
+            return;
+        }
+
+        ImGui.SetNextItemWidth(90f * scale);
+        ImGui.InputInt("Hour##noteHour24", ref noteEditorHour);
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(90f * scale);
+        ImGui.InputInt("Minute##noteMinute24", ref noteEditorMinute);
+        noteEditorHour = Math.Clamp(noteEditorHour, 0, 23);
+        noteEditorMinute = Math.Clamp(noteEditorMinute, 0, 59);
+        noteEditorIsPm = noteEditorHour >= 12;
     }
 
     private void DrawNoteEditorHeader()
@@ -1982,11 +2015,31 @@ public sealed partial class CalendarWindow : Window
         _ => "Topic"
     };
 
-    private static string NoteLabel(CalendarNote note)
+    private string NoteLabel(CalendarNote note)
     {
         return note.ScheduledAt is { } scheduledAt
-            ? $"{scheduledAt:t} {note.Text}"
+            ? $"{FormatNoteTime(scheduledAt)} {note.Text}"
             : note.Text;
+    }
+
+    private string FormatNoteTime(DateTime scheduledAt)
+        => plugin.Configuration.UseTwelveHourNoteTimes
+            ? scheduledAt.ToString("h:mm tt")
+            : scheduledAt.ToString("HH:mm");
+
+    private static int ToTwelveHour(int hour)
+    {
+        var value = hour % 12;
+        return value == 0 ? 12 : value;
+    }
+
+    private static int FromTwelveHour(int hour, bool isPm)
+    {
+        hour = Math.Clamp(hour, 1, 12);
+        if (hour == 12)
+            return isPm ? 12 : 0;
+
+        return isPm ? hour + 12 : hour;
     }
 
     private static FontAwesomeIcon KindIcon(LodestoneEntryKind kind) => kind switch

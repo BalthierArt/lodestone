@@ -50,7 +50,7 @@ public sealed class NoteAlarmService : IDisposable
             Plugin.Notifications.AddNotification(new Notification
             {
                 Title = "Lodestone Note",
-                Content = $"{note.Text} at {scheduledAt:t}",
+                Content = $"{note.Text} at {FormatNoteTime(scheduledAt)}",
                 Type = NotificationType.Info,
                 Minimized = false
             });
@@ -67,4 +67,9 @@ public sealed class NoteAlarmService : IDisposable
                && note.ScheduledAt.HasValue
                && note.ScheduledAt.Value >= DateTime.Now.Date;
     }
+
+    private string FormatNoteTime(DateTime scheduledAt)
+        => plugin.Configuration.UseTwelveHourNoteTimes
+            ? scheduledAt.ToString("h:mm tt")
+            : scheduledAt.ToString("HH:mm");
 }

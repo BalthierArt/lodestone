@@ -12,7 +12,7 @@ public class Configuration : IPluginConfiguration
     private static readonly Vector4 DefaultDayHighlightColor = new(0.70f, 0.55f, 0.30f, 0.55f);
     private static readonly Vector4 DefaultDayOfWeekColor = new(0.90f, 0.84f, 0.65f, 1f);
 
-    public int Version { get; set; } = 14;
+    public int Version { get; set; } = 15;
     public string Region { get; set; } = "na";
     public bool ShowEvents { get; set; } = true;
     public bool ShowTopics { get; set; } = true;
@@ -36,6 +36,7 @@ public class Configuration : IPluginConfiguration
     public bool DtrShowActiveMaintenance { get; set; } = true;
     public bool DtrShowUpcomingMaintenance { get; set; } = true;
     public bool EnableNoteAlarms { get; set; } = true;
+    public bool UseTwelveHourNoteTimes { get; set; } = false;
     public bool UseCustomNoteAlarmWarning { get; set; } = false;
     public int NoteAlarmWarningMinutes { get; set; } = 60;
     public int CustomNoteAlarmWarningMinutes { get; set; } = 10;
@@ -194,6 +195,13 @@ public class Configuration : IPluginConfiguration
         {
             ShowSubmarineReturns = true;
             Version = 14;
+            Save();
+        }
+
+        if (Version < 15)
+        {
+            UseTwelveHourNoteTimes = false;
+            Version = 15;
             Save();
         }
 
