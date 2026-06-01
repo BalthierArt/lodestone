@@ -10,6 +10,14 @@ Lodestone Calendar is a Dalamud plugin that scans the official Final Fantasy XIV
 
 ![Lodestone Calendar month view](preview.png)
 
+## Install
+
+Add this custom repository in Dalamud:
+
+```text
+https://raw.githubusercontent.com/BalthierArt/Leonhart/main/repo.json
+```
+
 ## Party Sync
 
 Party Sync lets players share planned calendar events. A player can right-click a day, choose `Plan Party Event`, pick a Party Finder-style icon, add a title/details/time, and other players in the same shared group can mark themselves as `Interested`, `Maybe`, or remove their response.
