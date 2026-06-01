@@ -4,7 +4,9 @@
   <img src="icon.png" alt="Lodestone Calendar icon" width="160" />
 </p>
 
-Lodestone Calendar is a Dalamud plugin that scans the official Final Fantasy XIV Lodestone and presents events, topics, notices, maintenance, recovery, status, and update posts in an in-game calendar.
+Lodestone Calendar is a Dalamud plugin that brings the official FINAL FANTASY XIV Lodestone into an in-game calendar. It can show seasonal events, topics, notices, maintenance, recovery, status posts, update posts, personal notes, alarms, and shared party plans.
+
+The goal is simple: make FFXIV's Lodestone feel more like an in-game MMO calendar, with images, reminders, and useful day-by-day details instead of making you keep a browser open.
 
 ## Preview
 
@@ -18,133 +20,84 @@ Add this custom repository in Dalamud:
 https://raw.githubusercontent.com/BalthierArt/Leonhart/main/repo.json
 ```
 
-## Party Sync
+After adding the repository, install `Lodestone` from Dalamud's plugin installer.
 
-Party Sync lets players share planned calendar events. A player can right-click a day, choose `Plan Party Event`, pick a Party Finder-style icon, add a title/details/time, and other players in the same shared group can mark themselves as `Interested`, `Maybe`, or remove their response.
+## Features
 
-The built-in transport uses the Supabase Edge Function in `Supabase/functions/lodestone-party-sync`. Supabase mode needs a Lodestone Party Key because that key decides who can see the shared party events.
+### Lodestone Calendar
 
-External IPC Bridge mode does not need a Lodestone Party Key. In that mode, Lodestone keeps and exposes party event JSON locally, and another plugin is expected to relay it through that plugin's existing group/key system.
+Choose what Lodestone sections the plugin pulls into the calendar:
 
-The plugin stores only party events and sign-up responses. It does not upload Lodestone scrape data or local player notes.
+- Events
+- Topics
+- Notices
+- Maintenance
+- Recovery
+- Status
+- Updates
 
-## IPC For Sharing Plugins
+Each day can show Lodestone artwork, category icons, and event start/end markers. Clicking a day opens details for the items on that date, and clicking a Lodestone entry can open a styled details window with the original Lodestone link.
 
-Lodestone exposes local Dalamud IPC so other plugins can integrate with party event sharing. This is meant for plugins such as sync or mod-sharing clients that may want to bridge Lodestone party event payloads through their own network later.
+### Display Priority
 
-Important: IPC is local to the player's client. Another plugin must still call Lodestone's IPC and relay the data through its own sharing system if it wants to sync through Snowcloak, Light Sync, Mare-style groups, or another transport. When External IPC Bridge is enabled, Lodestone does not require its own separate Party Key.
+When several posts land on the same day, you can control which type wins the day image and appears first. For example, you can make updates show above news, or make a seasonal event start day take priority over ordinary posts.
 
-### IPC Providers
+The plugin also has priority rules for common Lodestone posts, so repeated topics are less likely to hide the things you actually care about.
 
-`Lodestone.PartySync.ApiVersion`
+### Notes And Alarms
 
-Returns the IPC contract version as a string.
+Right-click a day to add a personal note, such as `Raid Night`, `Maps`, or `Static Trial Practice`.
 
-`Lodestone.PartySync.IsConfigured`
+Notes can include a time, and alarms can remind you before the event starts. Use this to avoid missing raid time again because you were lost in roulettes, crafting, or inventory cleanup.
 
-Returns whether Lodestone can currently create/share party events through either Supabase or External IPC Bridge.
+### Party Events
 
-`Lodestone.PartySync.IsSupabaseConfigured`
+Right-click a day and choose `Plan Party Event` to create a shared party plan. Pick a Party Finder-style icon, add a title, add details, and let other players mark themselves as:
 
-Returns whether Lodestone's built-in Supabase transport is configured.
+- Interested
+- Maybe
+- Removed
 
-`Lodestone.PartySync.IsExternalBridgeEnabled`
+This was inspired by the World of Warcraft calendar style: one person creates an event, and the group can see who is interested or maybe attending.
 
-Returns whether Lodestone is allowing another plugin to bridge party events through IPC.
+Party Sync is experimental and still an ongoing project. It is built to support two sharing options:
 
-`Lodestone.PartySync.Transport`
+### Party Sync Option 1: Supabase
 
-Returns `Supabase`, `External IPC bridge`, or `Disabled`.
+Supabase is a small cloud database/backend service. In simple terms, it is a shared online box where Lodestone can store party events for a group key.
 
-`Lodestone.PartySync.Status`
+If you use Supabase mode, Lodestone can upload and download shared party events directly through that backend. It does not upload your local notes or scraped Lodestone calendar data.
 
-Returns the current party sync status text.
+### Party Sync Option 2: Mod Sync Plugins
 
-`Lodestone.PartySync.GetIconCatalogJson`
+Lodestone also exposes local Dalamud IPC for other plugins to use. This means a bridge or sync plugin could grab Lodestone party event data and share it through that plugin's existing group/key system.
 
-Returns JSON containing supported Party Finder-style icon keys and Lumina icon IDs.
+If a mod sync bridge supports Lodestone IPC in the future, you may not need Supabase at all. The bridge plugin could handle the sharing, and Lodestone would just provide the event data and UI.
 
-`Lodestone.PartySync.GetEventsJson`
+Developers and bridge authors can read the IPC details here:
 
-Takes `startDate` and `endDate` strings, preferably `YYYY-MM-DD`, and returns cached party events for that range.
+[IPCreadme.md](IPCreadme.md)
 
-`Lodestone.PartySync.QueueEventJson`
+### Quest Lookup
 
-Takes an event JSON payload and queues a save through Lodestone.
+Event details can try an experimental quest lookup through Gamer Escape. When it works, it can show quest requirements, rewards, objectives, and location text.
 
-Example:
+This feature depends on Gamer Escape allowing the request. If the site blocks or rate-limits the lookup, Lodestone will show a friendly failure message and you can try again later.
 
-```json
-{
-  "date": "2026-06-05",
-  "hour": 21,
-  "minute": 0,
-  "title": "New Extreme Trial. Who's interested?",
-  "description": "Learning party, bring snacks.",
-  "iconKey": "trial"
-}
-```
+### Customization
 
-`Lodestone.PartySync.QueueResponseJson`
+The settings window lets you adjust how the calendar feels:
 
-Takes a response JSON payload and queues an RSVP update through Lodestone.
+- Change day colors and highlight colors
+- Use short or full weekday names
+- Control how dark non-current-day images appear
+- Show text only on hover for a cleaner calendar
+- Choose which Lodestone categories appear
+- Adjust refresh and cache settings
+- Control server bar/DTR behavior
 
-Example:
+## Notes
 
-```json
-{
-  "eventId": "event-id-from-get-events",
-  "status": "interested"
-}
-```
+Lodestone Calendar reads public Lodestone pages and stores a local cache so it does not need to scan constantly. The default refresh interval is once every 24 hours.
 
-`status` can be `interested`, `maybe`, or `remove`.
-
-`Lodestone.PartySync.ImportEventsJson`
-
-Takes a single event, an array of events, or an object with `events`. This lets a sync plugin import party event data it received from its own group/key network.
-
-Example:
-
-```json
-{
-  "events": [
-    {
-      "id": "bridge-event-id",
-      "date": "2026-06-05",
-      "hour": 21,
-      "minute": 0,
-      "title": "New Extreme Trial. Who's interested?",
-      "description": "Learning party, bring snacks.",
-      "iconKey": "trial",
-      "creatorName": "Player Name",
-      "creatorWorld": "Cactuar",
-      "responses": []
-    }
-  ]
-}
-```
-
-`Lodestone.PartySync.QueueRefresh`
-
-Queues a refresh of the currently visible party event range. This is a no-op in External IPC Bridge mode unless the bridge plugin imports fresh data.
-
-### C# Consumer Sketch
-
-```csharp
-var eventsIpc = pluginInterface.GetIpcSubscriber<string, string, string>("Lodestone.PartySync.GetEventsJson");
-var resultJson = eventsIpc.InvokeFunc("2026-06-01", "2026-06-30");
-
-var createIpc = pluginInterface.GetIpcSubscriber<string, string>("Lodestone.PartySync.QueueEventJson");
-var createResultJson = createIpc.InvokeFunc("""
-{
-  "date": "2026-06-05",
-  "hour": 21,
-  "minute": 0,
-  "title": "New Extreme Trial. Who's interested?",
-  "iconKey": "trial"
-}
-""");
-```
-
-All JSON responses include `ok`. Failed calls include `error`.
+Personal notes stay local. Party events are only shared if you enable a Party Sync option.
