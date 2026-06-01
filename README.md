@@ -22,6 +22,10 @@ https://raw.githubusercontent.com/BalthierArt/Leonhart/main/repo.json
 
 After adding the repository, install `Lodestone` from Dalamud's plugin installer.
 
+GitHub repository:
+
+[https://github.com/BalthierArt/lodestone](https://github.com/BalthierArt/lodestone)
+
 ## Features
 
 ### Lodestone Calendar
