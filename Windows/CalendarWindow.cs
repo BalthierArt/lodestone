@@ -2,6 +2,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
+using System.Text;
 using Lodestone.Models;
 using Lodestone.Services;
 
@@ -19,6 +20,8 @@ public sealed partial class CalendarWindow : Window
     private const string SubmarineReturnedHeroAsset = ImageCache.AssetScheme + "subreturned.png";
     private const string IcyVeinsArticleMarkerAsset = ImageCache.AssetScheme + "ivart.png";
     private const string LodestoneImageStopMarker = "https://lds-img.finalfantasyxiv.com/h/L/EbtcXqPUGzsVYdi23FpUR25oH4.png";
+    private const string ArticleCopyMarkerPrefix = "[[lodestone-copy:";
+    private const string ArticleImageMarkerPrefix = "[[lodestone-image:";
     private static readonly Vector4 DetailPrimary = new(0.42f, 0.22f, 0.78f, 0.92f);
     private static readonly Vector4 DetailAccent = new(0.64f, 0.38f, 1.00f, 1f);
     private static readonly Vector4 DetailMuted = new(0.68f, 0.66f, 0.78f, 1f);
@@ -40,6 +43,7 @@ public sealed partial class CalendarWindow : Window
     private bool detailTextCopyMode;
     private string detailTextCopyEntryId = string.Empty;
     private string detailTextCopyBuffer = string.Empty;
+    private bool detailPanelMeasurementPass;
     private DateTime? selectedDay;
     private string searchText = string.Empty;
     private bool noteEditorOpen;
@@ -2068,7 +2072,7 @@ public sealed partial class CalendarWindow : Window
         ImGui.SetCursorPos(new Vector2(startCursor.X, startCursor.Y + panelSize.Y + 8f * scale));
     }
 
-    private static void DrawDetailPanel(string id, uint backgroundColor, Action drawContent)
+    private void DrawDetailPanel(string id, uint backgroundColor, Action drawContent)
     {
         var draw = ImGui.GetWindowDrawList();
         var scale = ImGuiHelpers.GlobalScale;
@@ -2079,7 +2083,15 @@ public sealed partial class CalendarWindow : Window
 
         ImGui.SetCursorPos(startCursor + padding);
         ImGui.BeginGroup();
-        drawContent();
+        detailPanelMeasurementPass = true;
+        try
+        {
+            drawContent();
+        }
+        finally
+        {
+            detailPanelMeasurementPass = false;
+        }
         ImGui.EndGroup();
 
         var contentSize = ImGui.GetItemRectSize();
@@ -2094,15 +2106,29 @@ public sealed partial class CalendarWindow : Window
         ImGui.SetCursorPos(new Vector2(startCursor.X, startCursor.Y + panelSize.Y + 8f * scale));
     }
 
-    private static void DrawArticleText(string summary)
+    private void DrawArticleText(string summary)
     {
         var previousHeading = string.Empty;
+        var lineIndex = 0;
         foreach (var rawLine in summary.Replace('\r', '\n').Split('\n', StringSplitOptions.TrimEntries))
         {
+            lineIndex++;
             var line = rawLine.Trim();
             if (line.Length == 0)
             {
                 ImGui.Dummy(new Vector2(1f, 5f) * ImGuiHelpers.GlobalScale);
+                continue;
+            }
+
+            if (TryParseArticleImageMarker(line, out var imageUrl, out var imageAlt))
+            {
+                DrawInlineArticleImage(imageUrl, imageAlt);
+                continue;
+            }
+
+            if (TryParseArticleCopyMarker(line, out var copyLabel, out var copyPayload))
+            {
+                DrawArticleCopyControl(copyLabel, copyPayload, lineIndex);
                 continue;
             }
 
@@ -2139,6 +2165,101 @@ public sealed partial class CalendarWindow : Window
 
             DrawRichArticleText(line, color);
         }
+    }
+
+    private void DrawInlineArticleImage(string url, string alt)
+    {
+        var scale = ImGuiHelpers.GlobalScale;
+        var width = Math.Min(ImGui.GetContentRegionAvail().X, 620f * scale);
+        var height = Math.Clamp(width * 0.55f, 90f * scale, 300f * scale);
+        var size = new Vector2(width, height);
+
+        if (!ShouldRenderInlineArticleImage(size))
+        {
+            ImGui.Dummy(size + new Vector2(0f, 5f * scale));
+            return;
+        }
+
+        var texture = plugin.ImageCache.GetTexture(url);
+        if (texture == null)
+        {
+            DrawInlineArticleImagePlaceholder(size, alt);
+            return;
+        }
+
+        ImGui.Image(texture.Handle, size);
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+            ImGui.SetTooltip(string.IsNullOrWhiteSpace(alt) ? url : $"{alt}\n{url}");
+        }
+
+        if (ImGui.IsItemClicked())
+            Dalamud.Utility.Util.OpenLink(url);
+
+        ImGui.Dummy(new Vector2(1f, 5f) * scale);
+    }
+
+    private bool ShouldRenderInlineArticleImage(Vector2 size)
+    {
+        if (detailPanelMeasurementPass)
+            return false;
+
+        var scale = ImGuiHelpers.GlobalScale;
+        var margin = 120f * scale;
+        var min = ImGui.GetCursorScreenPos();
+        var max = min + size;
+        var windowMin = ImGui.GetWindowPos();
+        var windowMax = windowMin + ImGui.GetWindowSize();
+
+        return max.Y >= windowMin.Y - margin
+               && min.Y <= windowMax.Y + margin
+               && max.X >= windowMin.X - margin
+               && min.X <= windowMax.X + margin;
+    }
+
+    private static void DrawInlineArticleImagePlaceholder(Vector2 size, string alt)
+    {
+        var scale = ImGuiHelpers.GlobalScale;
+        var min = ImGui.GetCursorScreenPos();
+        var max = min + size;
+        var draw = ImGui.GetWindowDrawList();
+        draw.AddRectFilled(min, max, Color(0.06f, 0.06f, 0.09f, 0.82f), 6f * scale);
+        draw.AddRect(min, max, DetailPanelPurple, 6f * scale, 0, 1f * scale);
+
+        var label = string.IsNullOrWhiteSpace(alt) ? "Loading image..." : $"Loading image: {alt}";
+        var textSize = ImGui.CalcTextSize(label);
+        var textPos = min + new Vector2(
+            Math.Max(8f * scale, (size.X - textSize.X) * 0.5f),
+            Math.Max(8f * scale, (size.Y - textSize.Y) * 0.5f));
+        draw.AddText(textPos, ToColor(DetailMuted), label);
+        ImGui.Dummy(size + new Vector2(0f, 5f * scale));
+    }
+
+    private void DrawArticleCopyControl(string label, string payload, int lineIndex)
+    {
+        var scale = ImGuiHelpers.GlobalScale;
+        using (ImRaii.PushColor(ImGuiCol.Text, DetailBlue))
+            ImGui.TextUnformatted(string.IsNullOrWhiteSpace(label) ? "Copy code" : label);
+
+        ImGui.SameLine();
+        if (detailPanelMeasurementPass)
+        {
+            var buttonTextSize = ImGui.CalcTextSize("Copy");
+            var framePadding = ImGui.GetStyle().FramePadding;
+            ImGui.Dummy(new Vector2(buttonTextSize.X + framePadding.X * 2f, ImGui.GetFrameHeight()));
+            return;
+        }
+
+        using var button = ImRaii.PushColor(ImGuiCol.Button, DetailPrimary);
+        using var hovered = ImRaii.PushColor(ImGuiCol.ButtonHovered, DetailAccent);
+        using var active = ImRaii.PushColor(ImGuiCol.ButtonActive, new Vector4(0.32f, 0.16f, 0.62f, 1f));
+        if (ImGui.SmallButton($"Copy##articleCopy{lineIndex}"))
+            ImGui.SetClipboardText(payload);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Copy this code to your clipboard.");
+
+        ImGui.Dummy(new Vector2(1f, 5f) * scale);
     }
 
     private static void DrawRichArticleText(string text, Vector4 baseColor)
@@ -2216,6 +2337,66 @@ public sealed partial class CalendarWindow : Window
         }
     }
 
+    private static bool TryParseArticleImageMarker(string line, out string url, out string alt)
+    {
+        url = string.Empty;
+        alt = string.Empty;
+        if (!TryParseArticleMarker(line, ArticleImageMarkerPrefix, 2, out var values))
+            return false;
+
+        url = values[0];
+        alt = values[1];
+        return !string.IsNullOrWhiteSpace(url);
+    }
+
+    private static bool TryParseArticleCopyMarker(string line, out string label, out string payload)
+    {
+        label = string.Empty;
+        payload = string.Empty;
+        if (!TryParseArticleMarker(line, ArticleCopyMarkerPrefix, 2, out var values))
+            return false;
+
+        label = values[0];
+        payload = values[1];
+        return !string.IsNullOrWhiteSpace(payload);
+    }
+
+    private static bool TryParseArticleMarker(string line, string prefix, int expectedParts, out string[] values)
+    {
+        values = [];
+        if (!line.StartsWith(prefix, StringComparison.Ordinal) || !line.EndsWith("]]", StringComparison.Ordinal))
+            return false;
+
+        var body = line[prefix.Length..^2];
+        var parts = body.Split(':', expectedParts);
+        if (parts.Length != expectedParts)
+            return false;
+
+        var decoded = new string[parts.Length];
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (!TryDecodeArticleMarkerValue(parts[i], out decoded[i]))
+                return false;
+        }
+
+        values = decoded;
+        return true;
+    }
+
+    private static bool TryDecodeArticleMarkerValue(string value, out string decoded)
+    {
+        try
+        {
+            decoded = Encoding.UTF8.GetString(Convert.FromBase64String(value));
+            return true;
+        }
+        catch
+        {
+            decoded = string.Empty;
+            return false;
+        }
+    }
+
     private static void DrawArticleToken(string token, ArticleInlineRun run, Vector4 baseColor)
     {
         var color = run.Bold
@@ -2251,10 +2432,23 @@ public sealed partial class CalendarWindow : Window
         var lines = text
             .Replace("\r", string.Empty, StringComparison.Ordinal)
             .Split('\n')
+            .Select(PlainArticleMarkerText)
             .Select(line => line.StartsWith("## ", StringComparison.Ordinal) ? line[3..] : line)
             .Select(line => line.StartsWith("> ", StringComparison.Ordinal) ? line[2..] : line)
             .Select(line => line.Replace("**", string.Empty, StringComparison.Ordinal).Replace("*", string.Empty, StringComparison.Ordinal));
         return string.Join("\n", lines).Trim();
+    }
+
+    private static string PlainArticleMarkerText(string line)
+    {
+        var trimmed = line.Trim();
+        if (TryParseArticleImageMarker(trimmed, out _, out var alt))
+            return string.IsNullOrWhiteSpace(alt) ? string.Empty : $"[Image: {alt}]";
+
+        if (TryParseArticleCopyMarker(trimmed, out var label, out var payload))
+            return string.IsNullOrWhiteSpace(label) ? payload : $"{label}\n{payload}";
+
+        return line;
     }
 
     private void DrawDetailActions(LodestoneEntry entry)

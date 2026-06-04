@@ -58,7 +58,7 @@ static void TestMaintenancePdt()
     AssertContains(entry.SourceTimeText, "Jun. 2, 2026 3:00 a.m.", "source text");
     AssertContains(entry.Summary, "## [Maintenance] All Worlds Maintenance", "maintenance heading");
     AssertContains(entry.Summary, "We will be performing maintenance", "maintenance paragraph");
-    AssertEqual(3, entry.ArticleFormatVersion, "maintenance format version");
+    AssertEqual(4, entry.ArticleFormatVersion, "maintenance format version");
 }
 
 static void TestInvalidMaintenanceDate()
@@ -90,7 +90,7 @@ static void TestSpecialEvent()
     AssertContains(entry.Title, "Make It Rain", "title");
     AssertContains(entry.Summary, "## You Otter Be There", "summary heading");
     AssertContains(entry.Summary, "Ollier locks eyes", "summary paragraph");
-    AssertEqual(3, entry.ArticleFormatVersion, "special format version");
+    AssertEqual(4, entry.ArticleFormatVersion, "special format version");
     AssertContains(entry.StartingLocation, "Ul'dah", "starting location");
     AssertEqual("https://lds-img.finalfantasyxiv.com/h/s/NWFaAgSpPh0h2emJx69yeD85nY.jpg", entry.HeroImageUrl, "hero");
 }
@@ -170,7 +170,7 @@ static void TestIcyVeinsArticle()
     AssertContains(entry.Summary, "*soft emphasis*", "article italic emphasis");
     AssertContains(entry.Summary, "- Bring friends.", "article first list item");
     AssertContains(entry.Summary, "- Try the new duty.", "article second list item");
-    AssertEqual(3, entry.ArticleFormatVersion, "article format version");
+    AssertEqual(4, entry.ArticleFormatVersion, "article format version");
     AssertEqual("https://static.icy-veins.com/wp/wp-content/uploads/2026/06/hero.webp", entry.HeroImageUrl, "icy hero");
 }
 
@@ -195,6 +195,14 @@ static void TestIcyVeinsGuide()
                         <h2>Occult Crescent: The South Horn</h2>
                         <p>South Horn is the first area of Occult Crescent released in patch 7.25.</p>
                         <ul><li>Complete FATEs and critical encounters.</li></ul>
+                        <img src="//static.icy-veins.com/images/ffxiv/dawntrail/raids/m9/waymark.jpg" alt="Waymarks" />
+                        <div class="export-string-wrapper">
+                          <details class="export-string">
+                            <summary><span class="export-string__title">Waymark Code</span></summary>
+                            <span class="export-string__code">{"Name":"M9S","MapID":1069}</span>
+                          </details>
+                          <button class="export-string__copy" type="button"><span>Copy</span></button>
+                        </div>
                         </div>
                         <div id="footer">footer noise</div>
                         </body></html>
@@ -217,7 +225,9 @@ static void TestIcyVeinsGuide()
     AssertEqual(expectedDate, entry.StartsAt, "guide updated date");
     AssertContains(entry.Summary, "## Occult Crescent: The South Horn", "guide heading");
     AssertContains(entry.Summary, "- Complete FATEs", "guide list");
-    AssertEqual(3, entry.ArticleFormatVersion, "guide format version");
+    AssertContains(entry.Summary, "[[lodestone-image:", "guide inline image marker");
+    AssertContains(entry.Summary, "[[lodestone-copy:", "guide copy marker");
+    AssertEqual(4, entry.ArticleFormatVersion, "guide format version");
     AssertEqual("https://static.icy-veins.com/images/ffxiv/background-images/dawntrail.jpg", entry.HeroImageUrl, "guide hero");
 }
 
@@ -252,7 +262,7 @@ static void TestDeveloperBlogArticle()
     AssertContains(entry.Summary, "Hello, everyone!", "blog first paragraph");
     AssertContains(entry.Summary, "Event Period", "blog heading");
     AssertContains(entry.Summary, "Reward one", "blog list");
-    AssertEqual(3, entry.ArticleFormatVersion, "blog format version");
+    AssertEqual(4, entry.ArticleFormatVersion, "blog format version");
     AssertEqual("Developer Blog", entry.Title, "blog title suffix stripped");
     AssertEqual("https://lds-img.finalfantasyxiv.com/blog_image/na_blog/hero.png", entry.HeroImageUrl, "blog hero prefers og image");
 }

@@ -18,7 +18,9 @@ public sealed partial class LodestoneClient : IDisposable
     private const string SpecialImageStopMarker = "https://lds-img.finalfantasyxiv.com/h/L/EbtcXqPUGzsVYdi23FpUR25oH4.png";
     private const string IcyVeinsUrl = "https://www.icy-veins.com/ffxiv/";
     private const string OfficialBlogUrl = "https://na.finalfantasyxiv.com/blog/";
-    private const int CurrentArticleFormatVersion = 3;
+    private const int CurrentArticleFormatVersion = 4;
+    private const string ArticleCopyMarkerPrefix = "[[lodestone-copy:";
+    private const string ArticleImageMarkerPrefix = "[[lodestone-image:";
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly HttpClient httpClient = new();
     private readonly FileInfo cacheFile;
@@ -607,7 +609,7 @@ public sealed partial class LodestoneClient : IDisposable
         entry.SourceTimeText = $"Last updated {startsAt:g}";
 
         var articleHtml = ExtractIcyVeinsGuideContentHtml(html);
-        var fullText = CleanArticleText(articleHtml);
+        var fullText = CleanArticleText(articleHtml, includeInlineImages: true, imageBaseUrl: entry.Url);
         if (!string.IsNullOrWhiteSpace(fullText))
         {
             entry.Summary = string.IsNullOrWhiteSpace(entry.Author)
@@ -1006,14 +1008,15 @@ public sealed partial class LodestoneClient : IDisposable
         return FirstMatch(html, "<article[^>]+class=[\"'][^\"']*news__detail[^\"']*[\"'][^>]*>(?<value>.*?)</article>");
     }
 
-    private static string CleanArticleText(string html)
+    private static string CleanArticleText(string html, bool includeInlineImages = false, string imageBaseUrl = "")
     {
         if (string.IsNullOrWhiteSpace(html))
             return string.Empty;
 
         var text = ScriptRegex().Replace(html, " ");
         text = Regex.Replace(text, "<style.*?</style>", " ", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-        text = Regex.Replace(text, "<img[^>]*>", "\n\n", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        text = ExportStringWrapperRegex().Replace(text, m => BuildArticleCopyMarker(m.Value));
+        text = Regex.Replace(text, "<img[^>]*>", m => includeInlineImages ? BuildArticleImageMarker(m.Value, imageBaseUrl) : "\n\n", RegexOptions.IgnoreCase | RegexOptions.Singleline);
         text = Regex.Replace(text, "<h([1-6])[^>]*>(?<value>.*?)</h\\1>", m => $"\n\n## {CleanArticleInlineText(m.Groups["value"].Value)}\n\n", RegexOptions.IgnoreCase | RegexOptions.Singleline);
         text = Regex.Replace(text, "<blockquote[^>]*>(?<value>.*?)</blockquote>", m =>
         {
@@ -1059,6 +1062,36 @@ public sealed partial class LodestoneClient : IDisposable
 
         return string.Join("\n", lines);
     }
+
+    private static string BuildArticleCopyMarker(string html)
+    {
+        var title = CleanArticleInlineText(FirstMatch(html, "<span[^>]+class=[\"'][^\"']*export-string__title[^\"']*[\"'][^>]*>(?<value>.*?)</span>"));
+        var code = CleanArticleInlineText(FirstMatch(html, "<span[^>]+class=[\"'][^\"']*export-string__code(?:_large(?:_macro)?)?[^\"']*[\"'][^>]*>(?<value>.*?)</span>"));
+        if (string.IsNullOrWhiteSpace(code))
+            return "\n\n";
+
+        if (string.IsNullOrWhiteSpace(title))
+            title = code.StartsWith("[stgy:", StringComparison.OrdinalIgnoreCase) ? "Strategy Board" : "Waymark Code";
+
+        return $"\n\n{ArticleCopyMarkerPrefix}{EncodeArticleMarkerValue(title)}:{EncodeArticleMarkerValue(code)}]]\n\n";
+    }
+
+    private static string BuildArticleImageMarker(string html, string baseUrl)
+    {
+        var src = FirstMatch(html, "<img[^>]+src=[\"'](?<value>[^\"']+)[\"'][^>]*>");
+        if (string.IsNullOrWhiteSpace(src))
+            return "\n\n";
+
+        var url = NormalizeExternalImageUrl(WebUtility.HtmlDecode(src), string.IsNullOrWhiteSpace(baseUrl) ? IcyVeinsUrl : baseUrl);
+        if (!Uri.TryCreate(url, UriKind.Absolute, out _))
+            return "\n\n";
+
+        var alt = CleanText(FirstMatch(html, "<img[^>]+alt=[\"'](?<value>[^\"']*)[\"'][^>]*>"));
+        return $"\n\n{ArticleImageMarkerPrefix}{EncodeArticleMarkerValue(url)}:{EncodeArticleMarkerValue(alt)}]]\n\n";
+    }
+
+    private static string EncodeArticleMarkerValue(string value)
+        => Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
 
     private static string CleanArticleInlineText(string html)
     {
@@ -1683,6 +1716,8 @@ public sealed partial class LodestoneClient : IDisposable
     private static partial Regex TagRegex();
     [GeneratedRegex("\\s+")]
     private static partial Regex WhitespaceRegex();
+    [GeneratedRegex("<div[^>]+class=[\"'][^\"']*export-string-wrapper[^\"']*[\"'][^>]*>(?<value>.*?)</button>\\s*</div>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex ExportStringWrapperRegex();
     [GeneratedRegex("<entry>(?<entry>.*?)</entry>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex FeedEntryRegex();
     [GeneratedRegex("<link\\s+rel=[\"']alternate[\"'][^>]*href=[\"'](?<url>[^\"']+)[\"']", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
