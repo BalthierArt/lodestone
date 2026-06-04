@@ -12,7 +12,7 @@ public class Configuration : IPluginConfiguration
     private static readonly Vector4 DefaultDayHighlightColor = new(0.70f, 0.55f, 0.30f, 0.55f);
     private static readonly Vector4 DefaultDayOfWeekColor = new(0.90f, 0.84f, 0.65f, 1f);
 
-    public int Version { get; set; } = 15;
+    public int Version { get; set; } = 20;
     public string Region { get; set; } = "na";
     public bool ShowEvents { get; set; } = true;
     public bool ShowTopics { get; set; } = true;
@@ -21,10 +21,14 @@ public class Configuration : IPluginConfiguration
     public bool ShowUpdates { get; set; } = true;
     public bool ShowStatus { get; set; } = true;
     public bool ShowRecovery { get; set; } = true;
+    public bool ShowDeveloperPosts { get; set; } = false;
+    public bool ShowIcyVeins { get; set; } = false;
+    public bool ShowIcyVeinsGuides { get; set; } = false;
     public bool ShowDayImages { get; set; } = true;
     public bool ShowCalendarTextOnHoverOnly { get; set; } = true;
     public bool HoverTextClickOpensEntry { get; set; } = false;
     public bool AutoCycleDayHeroImages { get; set; } = false;
+    public bool PauseImageLoadingInCombat { get; set; } = true;
     public bool UseCustomDayImageDim { get; set; } = false;
     public float DayImageDimAmount { get; set; } = 0.28f;
     public bool ShowDtrEntry { get; set; } = true;
@@ -47,6 +51,7 @@ public class Configuration : IPluginConfiguration
     public int RefreshMinutes { get; set; } = 1440;
     public int MaxEntriesToScan { get; set; } = 120;
     public int MaxPagesPerSource { get; set; } = 3;
+    public int AutoClearCacheEntriesDays { get; set; } = 0;
     public int MaintenanceWarningHours { get; set; } = 24;
     public int PriorityUpdates { get; set; } = 100;
     public int PriorityTopics { get; set; } = 90;
@@ -55,6 +60,8 @@ public class Configuration : IPluginConfiguration
     public int PriorityStatus { get; set; } = 70;
     public int PriorityNotices { get; set; } = 60;
     public int PriorityEvents { get; set; } = 0;
+    public int PriorityDeveloperPosts { get; set; } = 65;
+    public int PriorityIcyVeins { get; set; } = 30;
     public List<PriorityRule> PriorityRules { get; set; } = DefaultPriorityRules();
     public float[] CalendarCurrentDayHighlightColor { get; set; } = ColorArray(DefaultCurrentDayHighlightColor);
     public float[] CalendarDayColor { get; set; } = ColorArray(DefaultDayColor);
@@ -205,6 +212,44 @@ public class Configuration : IPluginConfiguration
             Save();
         }
 
+        if (Version < 16)
+        {
+            PauseImageLoadingInCombat = true;
+            Version = 16;
+            Save();
+        }
+
+        if (Version < 17)
+        {
+            AddDefaultPriorityRuleIfMissing("topic_patch_notes_above_updates");
+            Version = 17;
+            Save();
+        }
+
+        if (Version < 18)
+        {
+            ShowDeveloperPosts = false;
+            ShowIcyVeins = false;
+            PriorityDeveloperPosts = 65;
+            PriorityIcyVeins = 30;
+            Version = 18;
+            Save();
+        }
+
+        if (Version < 19)
+        {
+            ShowIcyVeinsGuides = false;
+            Version = 19;
+            Save();
+        }
+
+        if (Version < 20)
+        {
+            AutoClearCacheEntriesDays = 0;
+            Version = 20;
+            Save();
+        }
+
         PriorityRules ??= DefaultPriorityRules();
         foreach (var rule in PriorityRules.Where(rule => string.IsNullOrWhiteSpace(rule.Id)))
             rule.Id = Guid.NewGuid().ToString("N");
@@ -221,6 +266,8 @@ public class Configuration : IPluginConfiguration
         PriorityStatus = 70;
         PriorityNotices = 60;
         PriorityEvents = 0;
+        PriorityDeveloperPosts = 65;
+        PriorityIcyVeins = 30;
         PriorityRules = DefaultPriorityRules();
     }
 
@@ -263,6 +310,9 @@ public class Configuration : IPluginConfiguration
         LodestoneEntryKind.Status => PriorityStatus,
         LodestoneEntryKind.Notice => PriorityNotices,
         LodestoneEntryKind.SpecialEvent => PriorityEvents,
+        LodestoneEntryKind.DeveloperPost => PriorityDeveloperPosts,
+        LodestoneEntryKind.IcyVeins => PriorityIcyVeins,
+        LodestoneEntryKind.IcyVeinsGuide => PriorityIcyVeins,
         _ => 30
     };
 
@@ -297,6 +347,16 @@ public class Configuration : IPluginConfiguration
                 AbsolutePriority = 10_000,
                 HeroAsset = "producer-live-hero.png",
                 Notes = "Always wins the day image."
+            },
+            new()
+            {
+                Id = "topic_patch_notes_above_updates",
+                Label = "Topic Patch Notes above Updates",
+                Kind = LodestoneEntryKind.Topic,
+                AllTextContains = ["Patch", "Notes"],
+                AnchorKind = LodestoneEntryKind.Update,
+                AnchorOffset = 1,
+                Notes = "Patch notes posted under Topics should show above normal update posts."
             },
             new()
             {

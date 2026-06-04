@@ -6,6 +6,15 @@ namespace Lodestone.Windows;
 
 public sealed partial class CalendarWindow
 {
+    private static readonly NeonPalette SubmarineCharacterPalette = new(
+        UiWidgets.Color(0.04f, 0.16f, 0.36f, 0.96f),
+        UiWidgets.Color(0.38f, 0.72f, 1f, 0.95f),
+        UiWidgets.Color(0.72f, 0.88f, 1f, 1f));
+    private static readonly NeonPalette SubmarineWorldPalette = new(
+        UiWidgets.Color(0.03f, 0.24f, 0.14f, 0.96f),
+        UiWidgets.Color(0.42f, 1f, 0.58f, 0.95f),
+        UiWidgets.Color(0.70f, 1f, 0.78f, 1f));
+
     private SubmarineReturn? selectedSubmarineReturn;
     private bool submarineReturnWindowNeedsPlacement;
 
@@ -115,6 +124,8 @@ public sealed partial class CalendarWindow
         DrawDetailPanel("##submarineReturnSummary", DetailPanel, () =>
         {
             ImGui.TextColored(DetailBlue, "Voyage");
+            DrawSubmarineIdentityBadges(submarineReturn);
+            ImGui.Spacing();
             DetailLine("Submarine", submarineReturn.VesselName);
             DetailLine("Character", SubmarineOwnerLabel(submarineReturn));
             DetailLine("Return time", submarineReturn.ReturnAt.ToString("F"));
@@ -164,6 +175,16 @@ public sealed partial class CalendarWindow
         ImGui.TextColored(DetailMuted, label);
         ImGui.SameLine(145f * ImGuiHelpers.GlobalScale);
         TextWrappedColored(Vector4.One, string.IsNullOrWhiteSpace(value) ? "Unknown" : value);
+    }
+
+    private static void DrawSubmarineIdentityBadges(SubmarineReturn submarineReturn)
+    {
+        var character = string.IsNullOrWhiteSpace(submarineReturn.CharacterName) ? "Unknown character" : submarineReturn.CharacterName;
+        var world = string.IsNullOrWhiteSpace(submarineReturn.World) ? "Unknown world" : submarineReturn.World;
+
+        UiWidgets.NeonBadge(character, SubmarineCharacterPalette);
+        ImGui.SameLine();
+        UiWidgets.NeonBadge(world, SubmarineWorldPalette);
     }
 
     private void DrawSubmarineReturnActions()

@@ -46,7 +46,7 @@ public sealed class Plugin : IDalamudPlugin
         Configuration.Initialize(PluginInterface);
 
         LodestoneClient = new LodestoneClient(PluginInterface.ConfigDirectory);
-        ImageCache = new ImageCache();
+        ImageCache = new ImageCache(this);
         GameEscapeClient = new GameEscapeClient(PluginInterface.ConfigDirectory);
         QuestNavigationService = new QuestNavigationService(this);
         PartySyncService = new PartySyncService(this);

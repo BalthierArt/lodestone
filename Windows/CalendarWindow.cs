@@ -17,6 +17,7 @@ public sealed partial class CalendarWindow : Window
     private const string EventEndMarkerAsset = ImageCache.AssetScheme + "eventend.png";
     private const string SubmarineReturnMarkerAsset = ImageCache.AssetScheme + "subicon.png";
     private const string SubmarineReturnedHeroAsset = ImageCache.AssetScheme + "subreturned.png";
+    private const string IcyVeinsArticleMarkerAsset = ImageCache.AssetScheme + "ivart.png";
     private const string LodestoneImageStopMarker = "https://lds-img.finalfantasyxiv.com/h/L/EbtcXqPUGzsVYdi23FpUR25oH4.png";
     private static readonly Vector4 DetailPrimary = new(0.42f, 0.22f, 0.78f, 0.92f);
     private static readonly Vector4 DetailAccent = new(0.64f, 0.38f, 1.00f, 1f);
@@ -36,6 +37,9 @@ public sealed partial class CalendarWindow : Window
     private IReadOnlyList<LodestoneEntry> entries = [];
     private DateTime visibleMonth = new(DateTime.Now.Year, DateTime.Now.Month, 1);
     private LodestoneEntry? selectedEntry;
+    private bool detailTextCopyMode;
+    private string detailTextCopyEntryId = string.Empty;
+    private string detailTextCopyBuffer = string.Empty;
     private DateTime? selectedDay;
     private string searchText = string.Empty;
     private bool noteEditorOpen;
@@ -61,6 +65,8 @@ public sealed partial class CalendarWindow : Window
     private readonly Dictionary<string, int> displayPriorityCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> heroImageUrlCache = new(StringComparer.Ordinal);
     private CalendarDayCache? calendarDayCache;
+    private AgendaCache? agendaCache;
+    private int cachedPrioritySignature;
     private int entriesVersion;
 
     public CalendarWindow(Plugin plugin) : base("Lodestone Calendar##LodestoneCalendar")
@@ -99,7 +105,7 @@ public sealed partial class CalendarWindow : Window
         catch (Exception ex)
         {
             Plugin.Log.Error(ex, "Lodestone refresh failed.");
-            var cached = await plugin.LodestoneClient.LoadCachedAsync();
+            var cached = await plugin.LodestoneClient.LoadCachedAsync(plugin.Configuration);
             lock (entryLock)
             {
                 entries = cached;
@@ -121,8 +127,7 @@ public sealed partial class CalendarWindow : Window
         calendarWindowPos = ImGui.GetWindowPos();
         calendarWindowSize = ImGui.GetWindowSize();
         dayHoverOverlay = null;
-        displayPriorityCache.Clear();
-        heroImageUrlCache.Clear();
+        RefreshPerDataCaches();
         DrawToolbar();
         ImGui.Separator();
         if (showAgenda)
@@ -148,7 +153,7 @@ public sealed partial class CalendarWindow : Window
             ImGui.SetTooltip("Previous month");
 
         ImGui.SameLine();
-        ImGui.TextUnformatted($"{MonthNames[visibleMonth.Month - 1]} {visibleMonth.Year}");
+        UiWidgets.NeonBadge($"{MonthNames[visibleMonth.Month - 1]} {visibleMonth.Year}", UiWidgets.SeasonPalette(visibleMonth.Month));
         ImGui.SameLine();
 
         if (ImGuiComponents.IconButton(FontAwesomeIcon.ChevronRight))
@@ -179,6 +184,16 @@ public sealed partial class CalendarWindow : Window
         ImGui.InputTextWithHint("##lodestoneSearch", "Search...", ref searchText, 80);
         ImGui.SameLine();
         ImGui.Checkbox("Agenda##lodestoneAgendaToggle", ref showAgenda);
+
+        var progress = plugin.LodestoneClient.CurrentProgress;
+        if (refreshInProgress || progress.IsActive)
+        {
+            ImGui.Spacing();
+            var label = progress.Total > 0
+                ? $"{progress.Status} ({progress.Completed}/{progress.Total})"
+                : progress.Status;
+            UiWidgets.ProgressBar(progress.Percent, label, indeterminate: progress.Total <= 0);
+        }
     }
 
     private void DrawCalendar()
@@ -327,6 +342,9 @@ public sealed partial class CalendarWindow : Window
             plugin.Configuration.ShowUpdates,
             plugin.Configuration.ShowStatus,
             plugin.Configuration.ShowRecovery,
+            plugin.Configuration.ShowDeveloperPosts,
+            plugin.Configuration.ShowIcyVeins,
+            plugin.Configuration.ShowIcyVeinsGuides,
             plugin.Configuration.ShowPartyEvents,
             plugin.Configuration.ShowSubmarineReturns,
             plugin.SubmarineService.Version,
@@ -334,6 +352,17 @@ public sealed partial class CalendarWindow : Window
             HiddenEntrySignature(),
             NoteSignature(),
             PrioritySignature());
+
+    private void RefreshPerDataCaches()
+    {
+        var signature = HashCode.Combine(entriesVersion, HiddenEntrySignature(), PrioritySignature());
+        if (signature == cachedPrioritySignature)
+            return;
+
+        displayPriorityCache.Clear();
+        heroImageUrlCache.Clear();
+        cachedPrioritySignature = signature;
+    }
 
     private int HiddenEntrySignature()
     {
@@ -372,6 +401,8 @@ public sealed partial class CalendarWindow : Window
         hash.Add(plugin.Configuration.PriorityStatus);
         hash.Add(plugin.Configuration.PriorityNotices);
         hash.Add(plugin.Configuration.PriorityEvents);
+        hash.Add(plugin.Configuration.PriorityDeveloperPosts);
+        hash.Add(plugin.Configuration.PriorityIcyVeins);
 
         foreach (var rule in plugin.Configuration.GetPriorityRules())
         {
@@ -423,6 +454,8 @@ public sealed partial class CalendarWindow : Window
             {
                 var imageAlpha = DayImageAlpha(today, currentMonth);
                 ImGui.GetWindowDrawList().AddImage(texture.Handle, min, max, Vector2.Zero, Vector2.One, Color(1f, 1f, 1f, imageAlpha));
+                if (IsIcyVeinsArticleHeroActive(heroImageUrl, data))
+                    DrawIcyVeinsArticleMarker(min, max, currentMonth);
             }
 
             var filmAlpha = DayFilmAlpha(today, currentMonth);
@@ -789,6 +822,23 @@ public sealed partial class CalendarWindow : Window
         drawList.AddText(min + new Vector2(iconSize.X + 7f * ImGuiHelpers.GlobalScale, (size.Y - ImGui.GetTextLineHeight()) * 0.5f), Color(1f, 0.82f, 0.42f, currentMonth ? 1f : 0.72f), text);
     }
 
+    private void DrawIcyVeinsArticleMarker(Vector2 min, Vector2 max, bool currentMonth)
+    {
+        var texture = plugin.ImageCache.GetTexture(IcyVeinsArticleMarkerAsset);
+        if (texture == null)
+            return;
+
+        var scale = ImGuiHelpers.GlobalScale;
+        var cellWidth = max.X - min.X;
+        var maxWidth = Math.Max(24f * scale, Math.Min(cellWidth - 12f * scale, 115f * scale));
+        var minWidth = Math.Min(76f * scale, maxWidth);
+        var width = Math.Clamp(cellWidth * 0.62f, minWidth, maxWidth);
+        var height = width * 0.34f;
+        var markerMin = new Vector2(min.X + 6f * scale, max.Y - height - 7f * scale);
+        var markerMax = markerMin + new Vector2(width, height);
+        ImGui.GetWindowDrawList().AddImage(texture.Handle, markerMin, markerMax, Vector2.Zero, Vector2.One, Color(1f, 1f, 1f, currentMonth ? 1f : 0.72f));
+    }
+
     private void DrawDayCornerIcons(IReadOnlyList<LodestoneEntryKind> kinds, int noteCount, bool hasSubmarineReturn, Vector2 min, Vector2 max, bool currentMonth)
     {
         if (kinds.Count == 0 && noteCount == 0 && !hasSubmarineReturn)
@@ -874,10 +924,7 @@ public sealed partial class CalendarWindow : Window
     }
 
     internal LodestoneEntry[] GetVisibleEntries()
-        => GetVisibleEntriesUnsorted()
-            .OrderByDescending(e => DisplayPriority(e))
-            .ThenBy(e => e.StartsAt)
-            .ToArray();
+        => GetAgendaEntries();
 
     private LodestoneEntry[] GetVisibleEntriesUnsorted()
     {
@@ -957,8 +1004,43 @@ public sealed partial class CalendarWindow : Window
         LodestoneEntryKind.Update => plugin.Configuration.ShowUpdates,
         LodestoneEntryKind.Status => plugin.Configuration.ShowStatus,
         LodestoneEntryKind.Recovery => plugin.Configuration.ShowRecovery,
+        LodestoneEntryKind.DeveloperPost => plugin.Configuration.ShowDeveloperPosts,
+        LodestoneEntryKind.IcyVeins => plugin.Configuration.ShowIcyVeins,
+        LodestoneEntryKind.IcyVeinsGuide => plugin.Configuration.ShowIcyVeins && plugin.Configuration.ShowIcyVeinsGuides,
         _ => true
     };
+
+    private LodestoneEntry[] GetAgendaEntries()
+    {
+        var key = BuildAgendaCacheKey();
+        if (agendaCache is { } cache && cache.Key.Equals(key))
+            return cache.Entries;
+
+        var agendaEntries = GetVisibleEntriesUnsorted()
+            .OrderByDescending(e => DisplayPriority(e))
+            .ThenBy(e => e.StartsAt)
+            .ToArray();
+        agendaCache = new AgendaCache(key, agendaEntries);
+        return agendaEntries;
+    }
+
+    private AgendaCacheKey BuildAgendaCacheKey()
+        => new(
+            entriesVersion,
+            searchText,
+            plugin.Configuration.ShowEvents,
+            plugin.Configuration.ShowTopics,
+            plugin.Configuration.ShowNotices,
+            plugin.Configuration.ShowMaintenance,
+            plugin.Configuration.ShowUpdates,
+            plugin.Configuration.ShowStatus,
+            plugin.Configuration.ShowRecovery,
+            plugin.Configuration.ShowDeveloperPosts,
+            plugin.Configuration.ShowIcyVeins,
+            plugin.Configuration.ShowIcyVeinsGuides,
+            plugin.Configuration.OnlyCurrentAndFuture ? DateTime.Now.Date : DateTime.MinValue,
+            HiddenEntrySignature(),
+            PrioritySignature());
 
     private string SelectHeroImageUrl(DateTime day, CalendarDayData data, bool previewAllowed)
     {
@@ -982,6 +1064,16 @@ public sealed partial class CalendarWindow : Window
             return string.Empty;
 
         return ResolveHeroImageUrl(heroEntry);
+    }
+
+    private bool IsIcyVeinsArticleHeroActive(string heroImageUrl, CalendarDayData data)
+    {
+        if (string.IsNullOrWhiteSpace(heroImageUrl))
+            return false;
+
+        return data.Entries.Any(entry =>
+            entry.Kind == LodestoneEntryKind.IcyVeins &&
+            string.Equals(ResolveHeroImageUrl(entry), heroImageUrl, StringComparison.OrdinalIgnoreCase));
     }
 
     private string SelectCyclingHeroImageUrl(DateTime day, IReadOnlyList<string> heroes)
@@ -1170,20 +1262,41 @@ public sealed partial class CalendarWindow : Window
         ImGui.TableSetupColumn("Open", ImGuiTableColumnFlags.WidthFixed, 70f * ImGuiHelpers.GlobalScale);
         ImGui.TableHeadersRow();
 
-        foreach (var entry in GetVisibleEntries())
+        var agendaEntries = GetAgendaEntries();
+        if (agendaEntries.Length == 0)
         {
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted($"{entry.StartsAt:g}{(entry.EndsAt.HasValue ? $" - {entry.EndsAt.Value:g}" : string.Empty)}");
-            ImGui.TableNextColumn();
-            ImGui.TextColored(KindTextColor(entry.Kind), KindLabel(entry.Kind));
-            ImGui.TableNextColumn();
-            if (ImGui.Selectable($"{entry.Title}##agenda{entry.Id}", false, ImGuiSelectableFlags.SpanAllColumns))
-                SelectEntry(entry);
-            ImGui.TableNextColumn();
-            if (ImGui.SmallButton($"URL##agendaUrl{entry.Id}"))
-                Dalamud.Utility.Util.OpenLink(entry.Url);
+            ImGui.TextColored(DetailMuted, "No matching entries.");
+            return;
         }
+
+        var rowHeight = 25f * ImGuiHelpers.GlobalScale;
+        var clipper = new ImGuiListClipper();
+        clipper.Begin(agendaEntries.Length, rowHeight);
+        while (clipper.Step())
+        {
+            for (var i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
+            {
+                var entry = agendaEntries[i];
+                DrawAgendaRow(entry);
+            }
+        }
+    }
+
+    private void DrawAgendaRow(LodestoneEntry entry)
+    {
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted($"{entry.StartsAt:g}{(entry.EndsAt.HasValue ? $" - {entry.EndsAt.Value:g}" : string.Empty)}");
+        ImGui.TableNextColumn();
+        UiWidgets.NeonBadge(KindLabel(entry.Kind).ToUpperInvariant(), UiWidgets.KindPalette(entry.Kind), new Vector2(6f, 2f) * ImGuiHelpers.GlobalScale);
+        ImGui.TableNextColumn();
+        if (ImGui.Selectable($"{entry.Title}##agenda{entry.Id}", false, ImGuiSelectableFlags.SpanAllColumns))
+            SelectEntry(entry);
+        ImGui.TableNextColumn();
+        if (ImGui.SmallButton($"URL##agendaUrl{entry.Id}"))
+            Dalamud.Utility.Util.OpenLink(entry.Url);
     }
 
     private void DrawFilterBar()
@@ -1317,18 +1430,40 @@ public sealed partial class CalendarWindow : Window
                     DrawDaySubmarineReturnTile(submarineReturn);
             }
 
-            ImGui.Spacing();
-            DrawDaySectionHeader(FontAwesomeIcon.Newspaper, "Lodestone", DetailMuted);
             var dayEntries = GetEntriesForDay(day).ToArray();
+            var lodestoneEntries = dayEntries.Where(entry => !IsIcyVeinsEntry(entry)).ToArray();
+            var icyVeinsEntries = dayEntries.Where(IsIcyVeinsEntry).ToArray();
             if (dayEntries.Length == 0)
+            {
+                ImGui.Spacing();
+                DrawDaySectionHeader(FontAwesomeIcon.Newspaper, "Lodestone", DetailMuted);
                 ImGui.TextColored(DetailMuted, "No Lodestone entries for this day.");
+            }
             else
-                foreach (var entry in dayEntries)
-                    DrawDayEntryTile(entry);
+            {
+                if (lodestoneEntries.Length > 0)
+                {
+                    ImGui.Spacing();
+                    DrawDaySectionHeader(FontAwesomeIcon.Newspaper, "Lodestone", DetailMuted);
+                    foreach (var entry in lodestoneEntries)
+                        DrawDayEntryTile(entry);
+                }
+
+                if (icyVeinsEntries.Length > 0)
+                {
+                    ImGui.Spacing();
+                    DrawDaySectionHeader(FontAwesomeIcon.Globe, "Icy Veins", DetailBlue);
+                    foreach (var entry in icyVeinsEntries)
+                        DrawDayEntryTile(entry);
+                }
+            }
         }
 
         ImGui.End();
     }
+
+    private static bool IsIcyVeinsEntry(LodestoneEntry entry)
+        => entry.Kind is LodestoneEntryKind.IcyVeins or LodestoneEntryKind.IcyVeinsGuide;
 
     private static void DrawDaySectionHeader(FontAwesomeIcon icon, string label, Vector4 color)
     {
@@ -1355,7 +1490,7 @@ public sealed partial class CalendarWindow : Window
         var textX = start.X + 48f * scale;
         var titleWidth = width - 60f * scale;
         draw.AddText(new Vector2(textX, start.Y + 7f * scale), Color(1f, 1f, 1f, 1f), FitTextToWidth(entry.Title, titleWidth));
-        var meta = $"{KindLabel(entry.Kind)}  |  {entry.StartsAt:g}{(entry.EndsAt.HasValue ? $" - {entry.EndsAt.Value:g}" : string.Empty)}";
+        var meta = $"{KindLabel(entry.Kind)}  |  {EntrySourceLabel(entry)}  |  {entry.StartsAt:g}{(entry.EndsAt.HasValue ? $" - {entry.EndsAt.Value:g}" : string.Empty)}";
         draw.AddText(new Vector2(textX, start.Y + 29f * scale), Color(1f, 1f, 1f, 0.72f), FitTextToWidth(meta, titleWidth));
 
         if (ImGui.InvisibleButton($"##dayEntryTile{entry.Id}", size))
@@ -1370,7 +1505,6 @@ public sealed partial class CalendarWindow : Window
 
         ImGui.Spacing();
     }
-
     private void DrawDayNoteTile(CalendarNote note)
     {
         var scale = ImGuiHelpers.GlobalScale;
@@ -1614,10 +1748,20 @@ public sealed partial class CalendarWindow : Window
 
     private void SelectEntry(LodestoneEntry entry)
     {
+        if (selectedEntry == null || !selectedEntry.Id.Equals(entry.Id, StringComparison.Ordinal))
+            ClearDetailTextCopyMode();
+
         selectedEntry = entry;
         selectedPartyEvent = null;
         selectedSubmarineReturn = null;
         detailWindowNeedsPlacement = true;
+    }
+
+    private void ClearDetailTextCopyMode()
+    {
+        detailTextCopyMode = false;
+        detailTextCopyEntryId = string.Empty;
+        detailTextCopyBuffer = string.Empty;
     }
 
     private void PrimeSideWindowPlacement(Vector2 desiredSize, ref bool needsPlacement)
@@ -1673,12 +1817,18 @@ public sealed partial class CalendarWindow : Window
         {
             ImGui.End();
             if (!open)
+            {
+                ClearDetailTextCopyMode();
                 selectedEntry = null;
+            }
             return;
         }
 
         if (!open)
+        {
+            ClearDetailTextCopyMode();
             selectedEntry = null;
+        }
 
         if (selectedEntry != null)
         {
@@ -1710,7 +1860,7 @@ public sealed partial class CalendarWindow : Window
                 using var tabs = ImRaii.TabBar("##lodestoneDetailTabs");
                 if (tabs.Success)
                 {
-                    using (var overview = ImRaii.TabItem("Overview"))
+                    using (var overview = ImRaii.TabItem(entry.FullArticleParsed ? "Article" : "Overview"))
                     {
                         if (overview.Success)
                             DrawOverview(entry);
@@ -1756,8 +1906,19 @@ public sealed partial class CalendarWindow : Window
         draw.AddRect(start, start + new Vector2(width, height), DetailPanelPurple, 8f * scale, 0, 1.5f * scale);
 
         DrawDetailKindIcon(entry.Kind, start + new Vector2(14f, 10f) * scale, 22f * scale);
-        ImGui.SetCursorScreenPos(start + new Vector2(44f, 9f) * scale);
-        ImGui.TextColored(DetailMuted, $"{KindLabel(entry.Kind)}  |  {entry.StartsAt:g}{(entry.EndsAt.HasValue ? $" - {entry.EndsAt.Value:g}" : string.Empty)}");
+        ImGui.SetCursorScreenPos(start + new Vector2(44f, 8f) * scale);
+        var badgeLabel = DetailBadgeLabel(entry);
+        var sourceLabel = EntrySourceLabel(entry);
+        UiWidgets.NeonBadge(badgeLabel.ToUpperInvariant(), UiWidgets.KindPalette(entry.Kind), new Vector2(6f, 2f) * scale);
+        if (!sourceLabel.Equals("Lodestone", StringComparison.OrdinalIgnoreCase)
+            && !sourceLabel.Equals(badgeLabel, StringComparison.OrdinalIgnoreCase))
+        {
+            ImGui.SameLine(0, 5f * scale);
+            UiWidgets.NeonBadge(sourceLabel, UiWidgets.KindPalette(entry.Kind), new Vector2(6f, 2f) * scale);
+        }
+
+        ImGui.SameLine(0, 7f * scale);
+        ImGui.TextColored(DetailMuted, $"{entry.StartsAt:g}{(entry.EndsAt.HasValue ? $" - {entry.EndsAt.Value:g}" : string.Empty)}");
 
         ImGui.SetCursorScreenPos(start + new Vector2(14f, 35f) * scale);
         ImGui.SetWindowFontScale(1.08f);
@@ -1811,19 +1972,40 @@ public sealed partial class CalendarWindow : Window
 
     private void DrawOverview(LodestoneEntry entry)
     {
-        DrawDetailPanel("##detailOverviewPanel", DetailPanel, () =>
+        if (!string.IsNullOrWhiteSpace(entry.Summary))
         {
-            if (!string.IsNullOrWhiteSpace(entry.Summary))
-                DrawArticleText(entry.Summary);
+            if (IsDetailTextCopyMode(entry))
+                DrawArticleCopyText(entry);
             else
-                ImGui.TextColored(DetailMuted, "No overview text was parsed for this entry.");
+                DrawDetailPanel("##detailOverviewPanel", DetailPanel, () => DrawArticleText(entry.Summary));
+        }
+        else
+        {
+            DrawDetailPanel("##detailOverviewPanel", DetailPanel, () => ImGui.TextColored(DetailMuted, "No overview text was parsed for this entry."));
+        }
 
+        var hasMetadata = !string.IsNullOrWhiteSpace(entry.StartingNpc)
+                          || !string.IsNullOrWhiteSpace(entry.StartingLocation)
+                          || !string.IsNullOrWhiteSpace(entry.SourceTimeText)
+                          || entry.Requirements.Count > 0;
+        if (!hasMetadata)
+            return;
+
+        DrawDetailPanel("##detailMetadataPanel", DetailPanelElevated, () =>
+        {
             if (!string.IsNullOrWhiteSpace(entry.StartingNpc) || !string.IsNullOrWhiteSpace(entry.StartingLocation))
+            {
+                ImGui.TextColored(DetailGreen, "Starts");
+                WrappedText($"{entry.StartingNpc} {entry.StartingLocation}".Trim());
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.SourceTimeText))
             {
                 ImGui.Spacing();
                 ImGui.Separator();
-                ImGui.TextColored(DetailGreen, "Starts");
-                WrappedText($"{entry.StartingNpc} {entry.StartingLocation}".Trim());
+                ImGui.TextColored(DetailGreen, EntrySourceLabel(entry).Equals("Lodestone", StringComparison.OrdinalIgnoreCase) ? "Lodestone time" : "Source time");
+                WrappedText(entry.SourceTimeText);
+                ImGui.TextColored(DetailMuted, "Shown on the calendar in your local time.");
             }
 
             if (entry.Requirements.Count > 0)
@@ -1835,6 +2017,55 @@ public sealed partial class CalendarWindow : Window
                     ImGui.BulletText(requirement);
             }
         });
+    }
+
+    private bool IsDetailTextCopyMode(LodestoneEntry entry)
+        => detailTextCopyMode && detailTextCopyEntryId.Equals(entry.Id, StringComparison.Ordinal);
+
+    private void ToggleDetailTextCopyMode(LodestoneEntry entry)
+    {
+        if (IsDetailTextCopyMode(entry))
+        {
+            ClearDetailTextCopyMode();
+            return;
+        }
+
+        detailTextCopyMode = true;
+        detailTextCopyEntryId = entry.Id;
+        detailTextCopyBuffer = PlainArticleText(entry.Summary);
+    }
+
+    private void DrawArticleCopyText(LodestoneEntry entry)
+    {
+        if (!IsDetailTextCopyMode(entry))
+            ToggleDetailTextCopyMode(entry);
+
+        var scale = ImGuiHelpers.GlobalScale;
+        var draw = ImGui.GetWindowDrawList();
+        var startCursor = ImGui.GetCursorPos();
+        var startScreen = ImGui.GetCursorScreenPos();
+        var panelWidth = ImGui.GetContentRegionAvail().X;
+        var padding = new Vector2(10f, 10f) * scale;
+        var panelHeight = Math.Clamp(ImGui.GetContentRegionAvail().Y * 0.45f, 230f * scale, 380f * scale);
+        var panelSize = new Vector2(panelWidth, panelHeight);
+
+        draw.AddRectFilled(startScreen, startScreen + panelSize, DetailPanel, 8f * scale);
+        draw.AddRect(startScreen, startScreen + panelSize, DetailPanelPurple, 8f * scale, 0, 1f * scale);
+
+        ImGui.SetCursorPos(startCursor + padding);
+        var copyText = detailTextCopyBuffer;
+        using var frameBg = ImRaii.PushColor(ImGuiCol.FrameBg, new Vector4(0.06f, 0.06f, 0.09f, 0.98f));
+        using var frameHovered = ImRaii.PushColor(ImGuiCol.FrameBgHovered, new Vector4(0.08f, 0.08f, 0.13f, 0.98f));
+        using var frameActive = ImRaii.PushColor(ImGuiCol.FrameBgActive, new Vector4(0.08f, 0.08f, 0.13f, 0.98f));
+        using var textColor = ImRaii.PushColor(ImGuiCol.Text, new Vector4(1f, 1f, 1f, 1f));
+        ImGui.InputTextMultiline(
+            "##detailCopyText",
+            ref copyText,
+            Math.Max(4096, detailTextCopyBuffer.Length + 1),
+            panelSize - padding * 2f,
+            ImGuiInputTextFlags.ReadOnly);
+
+        ImGui.SetCursorPos(new Vector2(startCursor.X, startCursor.Y + panelSize.Y + 8f * scale));
     }
 
     private static void DrawDetailPanel(string id, uint backgroundColor, Action drawContent)
@@ -1866,26 +2097,37 @@ public sealed partial class CalendarWindow : Window
     private static void DrawArticleText(string summary)
     {
         var previousHeading = string.Empty;
-        foreach (var rawLine in summary.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var rawLine in summary.Replace('\r', '\n').Split('\n', StringSplitOptions.TrimEntries))
         {
             var line = rawLine.Trim();
             if (line.Length == 0)
+            {
+                ImGui.Dummy(new Vector2(1f, 5f) * ImGuiHelpers.GlobalScale);
                 continue;
+            }
 
             if (line.StartsWith("- ", StringComparison.Ordinal))
             {
                 using (ImRaii.PushColor(ImGuiCol.Text, DetailGreen))
                     ImGui.Bullet();
                 ImGui.SameLine();
-                TextWrappedColored(new Vector4(1f, 1f, 1f, 1f), line[2..]);
+                DrawRichArticleText(line[2..], new Vector4(1f, 1f, 1f, 1f));
                 continue;
             }
 
-            if (IsArticleHeading(line))
+            if (line.StartsWith("> ", StringComparison.Ordinal))
             {
+                using (ImRaii.PushColor(ImGuiCol.Text, DetailMuted))
+                    DrawRichArticleText(line[2..], DetailMuted);
+                continue;
+            }
+
+            if (line.StartsWith("## ", StringComparison.Ordinal) || IsArticleHeading(line))
+            {
+                var heading = line.StartsWith("## ", StringComparison.Ordinal) ? line[3..].Trim() : line;
                 ImGui.Spacing();
-                ImGui.TextColored(DetailGreen, line);
-                previousHeading = line.Trim().TrimEnd(':');
+                ImGui.TextColored(DetailGreen, heading);
+                previousHeading = heading.Trim().TrimEnd(':');
                 continue;
             }
 
@@ -1895,8 +2137,98 @@ public sealed partial class CalendarWindow : Window
                     ? DetailBlue
                     : new Vector4(1f, 1f, 1f, 1f);
 
-            TextWrappedColored(color, line);
+            DrawRichArticleText(line, color);
         }
+    }
+
+    private static void DrawRichArticleText(string text, Vector4 baseColor)
+    {
+        var runs = ParseArticleInlineRuns(text).ToArray();
+        if (runs.Length == 0)
+            return;
+
+        var scale = ImGuiHelpers.GlobalScale;
+        var lineStartX = ImGui.GetCursorScreenPos().X;
+        var wrapRight = lineStartX + Math.Max(96f * scale, ImGui.GetContentRegionAvail().X);
+        var firstWordOnLine = true;
+        var wroteAny = false;
+
+        foreach (var run in runs)
+        {
+            foreach (var word in run.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var token = firstWordOnLine ? word : $" {word}";
+                var tokenSize = ImGui.CalcTextSize(token);
+                var cursorX = ImGui.GetCursorScreenPos().X;
+                if (!firstWordOnLine && cursorX + tokenSize.X > wrapRight)
+                {
+                    ImGui.NewLine();
+                    ImGui.SetCursorScreenPos(new Vector2(lineStartX, ImGui.GetCursorScreenPos().Y));
+                    token = word;
+                    firstWordOnLine = true;
+                }
+
+                DrawArticleToken(token, run, baseColor);
+                ImGui.SameLine(0, 0);
+                firstWordOnLine = false;
+                wroteAny = true;
+            }
+        }
+
+        if (wroteAny)
+            ImGui.NewLine();
+    }
+
+    private static IEnumerable<ArticleInlineRun> ParseArticleInlineRuns(string text)
+    {
+        for (var i = 0; i < text.Length;)
+        {
+            if (i + 1 < text.Length && text[i] == '*' && text[i + 1] == '*')
+            {
+                var end = text.IndexOf("**", i + 2, StringComparison.Ordinal);
+                if (end > i + 2)
+                {
+                    yield return new ArticleInlineRun(text[(i + 2)..end], true, false);
+                    i = end + 2;
+                    continue;
+                }
+            }
+
+            if (text[i] == '*')
+            {
+                var end = text.IndexOf('*', i + 1);
+                if (end > i + 1)
+                {
+                    yield return new ArticleInlineRun(text[(i + 1)..end], false, true);
+                    i = end + 1;
+                    continue;
+                }
+            }
+
+            var next = text.IndexOf('*', i);
+            if (next < 0)
+                next = text.Length;
+
+            if (next > i)
+                yield return new ArticleInlineRun(text[i..next], false, false);
+
+            i = next == i ? i + 1 : next;
+        }
+    }
+
+    private static void DrawArticleToken(string token, ArticleInlineRun run, Vector4 baseColor)
+    {
+        var color = run.Bold
+            ? new Vector4(1f, 1f, 1f, baseColor.W)
+            : run.Italic
+                ? new Vector4(Math.Min(baseColor.X + 0.16f, 1f), Math.Min(baseColor.Y + 0.16f, 1f), Math.Min(baseColor.Z + 0.16f, 1f), baseColor.W)
+                : baseColor;
+        var pos = ImGui.GetCursorScreenPos();
+        using (ImRaii.PushColor(ImGuiCol.Text, color))
+            ImGui.TextUnformatted(token);
+
+        if (run.Bold)
+            ImGui.GetWindowDrawList().AddText(pos + new Vector2(0.65f * ImGuiHelpers.GlobalScale, 0f), ToColor(color), token);
     }
 
     private static bool IsArticleHeading(string line)
@@ -1907,12 +2239,27 @@ public sealed partial class CalendarWindow : Window
 
         return normalized.Length is > 0 and <= 36
                && !normalized.StartsWith("- ", StringComparison.Ordinal)
+               && !normalized.StartsWith("By ", StringComparison.OrdinalIgnoreCase)
                && normalized.IndexOfAny(new[] { '.', ',', '!', '?', ';' }) < 0;
+    }
+
+    private static string PlainArticleText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var lines = text
+            .Replace("\r", string.Empty, StringComparison.Ordinal)
+            .Split('\n')
+            .Select(line => line.StartsWith("## ", StringComparison.Ordinal) ? line[3..] : line)
+            .Select(line => line.StartsWith("> ", StringComparison.Ordinal) ? line[2..] : line)
+            .Select(line => line.Replace("**", string.Empty, StringComparison.Ordinal).Replace("*", string.Empty, StringComparison.Ordinal));
+        return string.Join("\n", lines).Trim();
     }
 
     private void DrawDetailActions(LodestoneEntry entry)
     {
-        if (ImGui.Button("Open Lodestone"))
+        if (ImGui.Button($"Open {EntrySourceLabel(entry)}"))
             Dalamud.Utility.Util.OpenLink(entry.Url);
         if (entry.Kind == LodestoneEntryKind.SpecialEvent)
         {
@@ -1923,14 +2270,36 @@ public sealed partial class CalendarWindow : Window
         ImGui.SameLine();
         if (ImGui.Button("Copy URL"))
             ImGui.SetClipboardText(entry.Url);
+        if (!string.IsNullOrWhiteSpace(entry.Summary))
+        {
+            ImGui.SameLine();
+            if (ImGui.Button(IsDetailTextCopyMode(entry) ? "Revert" : "Copy Text"))
+                ToggleDetailTextCopyMode(entry);
+        }
+
+        if (entry.Kind == LodestoneEntryKind.SpecialEvent)
+        {
+            ImGui.SameLine();
+            using var hideButton = ImRaii.PushColor(ImGuiCol.Button, new Vector4(0.54f, 0.08f, 0.08f, 1f));
+            using var hideHovered = ImRaii.PushColor(ImGuiCol.ButtonHovered, new Vector4(0.76f, 0.12f, 0.12f, 1f));
+            using var hideActive = ImRaii.PushColor(ImGuiCol.ButtonActive, new Vector4(0.40f, 0.05f, 0.05f, 1f));
+            if (ImGui.Button("Hide Event"))
+                HideEntry(entry);
+        }
+
         ImGui.SameLine();
         if (ImGui.Button("Mark Seen"))
-        {
-            if (!plugin.Configuration.HiddenEntryIds.Contains(entry.Id))
-                plugin.Configuration.HiddenEntryIds.Add(entry.Id);
-            plugin.Configuration.Save();
-            selectedEntry = null;
-        }
+            HideEntry(entry);
+    }
+
+    private void HideEntry(LodestoneEntry entry)
+    {
+        if (!plugin.Configuration.HiddenEntryIds.Contains(entry.Id))
+            plugin.Configuration.HiddenEntryIds.Add(entry.Id);
+
+        plugin.Configuration.Save();
+        ClearDetailTextCopyMode();
+        selectedEntry = null;
     }
 
     private void DrawRewards(LodestoneEntry entry)
@@ -2012,8 +2381,21 @@ public sealed partial class CalendarWindow : Window
         LodestoneEntryKind.Update => "Update",
         LodestoneEntryKind.Status => "Status",
         LodestoneEntryKind.Recovery => "Recovery",
+        LodestoneEntryKind.DeveloperPost => "Dev Post",
+        LodestoneEntryKind.IcyVeins => "Icy Veins",
+        LodestoneEntryKind.IcyVeinsGuide => "Icy Guide",
         _ => "Topic"
     };
+
+    private static string DetailBadgeLabel(LodestoneEntry entry) => entry.Kind switch
+    {
+        LodestoneEntryKind.IcyVeins => "Article",
+        LodestoneEntryKind.IcyVeinsGuide => "Guide",
+        _ => KindLabel(entry.Kind)
+    };
+
+    private static string EntrySourceLabel(LodestoneEntry entry)
+        => string.IsNullOrWhiteSpace(entry.SourceName) ? "Lodestone" : entry.SourceName;
 
     private string NoteLabel(CalendarNote note)
     {
@@ -2050,6 +2432,9 @@ public sealed partial class CalendarWindow : Window
         LodestoneEntryKind.Notice => FontAwesomeIcon.ExclamationCircle,
         LodestoneEntryKind.Update => FontAwesomeIcon.Download,
         LodestoneEntryKind.Status => FontAwesomeIcon.TimesCircle,
+        LodestoneEntryKind.DeveloperPost => FontAwesomeIcon.Rss,
+        LodestoneEntryKind.IcyVeins => FontAwesomeIcon.Globe,
+        LodestoneEntryKind.IcyVeinsGuide => FontAwesomeIcon.Book,
         _ => FontAwesomeIcon.Newspaper
     };
 
@@ -2061,6 +2446,9 @@ public sealed partial class CalendarWindow : Window
         LodestoneEntryKind.Notice => ImageCache.AssetScheme + "corner-news.png",
         LodestoneEntryKind.Status => ImageCache.AssetScheme + "corner-news.png",
         LodestoneEntryKind.Recovery => ImageCache.AssetScheme + "corner-news.png",
+        LodestoneEntryKind.DeveloperPost => ImageCache.AssetScheme + "corner-news.png",
+        LodestoneEntryKind.IcyVeins => ImageCache.AssetScheme + "corner-news.png",
+        LodestoneEntryKind.IcyVeinsGuide => ImageCache.AssetScheme + "corner-news.png",
         _ => string.Empty
     };
 
@@ -2070,6 +2458,9 @@ public sealed partial class CalendarWindow : Window
         LodestoneEntryKind.Maintenance => ImageCache.AssetScheme + "corner-maintenance.png",
         LodestoneEntryKind.Topic => ImageCache.AssetScheme + "corner-news.png",
         LodestoneEntryKind.Notice => ImageCache.AssetScheme + "corner-news.png",
+        LodestoneEntryKind.DeveloperPost => ImageCache.AssetScheme + "corner-news.png",
+        LodestoneEntryKind.IcyVeins => ImageCache.AssetScheme + "corner-news.png",
+        LodestoneEntryKind.IcyVeinsGuide => ImageCache.AssetScheme + "corner-news.png",
         _ => string.Empty
     };
 
@@ -2081,6 +2472,9 @@ public sealed partial class CalendarWindow : Window
         LodestoneEntryKind.Notice => new Vector4(0.86f, 0.76f, 1f, 1f),
         LodestoneEntryKind.Update => new Vector4(0.62f, 0.78f, 1f, 1f),
         LodestoneEntryKind.Status => new Vector4(1f, 0.82f, 0.42f, 1f),
+        LodestoneEntryKind.DeveloperPost => new Vector4(0.70f, 1f, 1f, 1f),
+        LodestoneEntryKind.IcyVeins => new Vector4(0.70f, 0.88f, 1f, 1f),
+        LodestoneEntryKind.IcyVeinsGuide => new Vector4(0.70f, 0.88f, 1f, 1f),
         _ => new Vector4(0.92f, 0.86f, 0.66f, 1f)
     };
 
@@ -2092,6 +2486,9 @@ public sealed partial class CalendarWindow : Window
         LodestoneEntryKind.Update => Color(0.18f, 0.31f, 0.55f, 0.86f),
         LodestoneEntryKind.Status => Color(0.48f, 0.34f, 0.08f, 0.86f),
         LodestoneEntryKind.Recovery => Color(0.30f, 0.24f, 0.56f, 0.86f),
+        LodestoneEntryKind.DeveloperPost => Color(0.08f, 0.32f, 0.36f, 0.86f),
+        LodestoneEntryKind.IcyVeins => Color(0.08f, 0.20f, 0.42f, 0.86f),
+        LodestoneEntryKind.IcyVeinsGuide => Color(0.10f, 0.24f, 0.48f, 0.86f),
         _ => Color(0.30f, 0.25f, 0.12f, 0.86f)
     };
 
@@ -2103,6 +2500,9 @@ public sealed partial class CalendarWindow : Window
         LodestoneEntryKind.Status => Color(0.58f, 0.39f, 0.08f, 0.95f),
         LodestoneEntryKind.Update => Color(0.13f, 0.31f, 0.58f, 0.94f),
         LodestoneEntryKind.Notice => Color(0.58f, 0.42f, 0.10f, 0.94f),
+        LodestoneEntryKind.DeveloperPost => Color(0.07f, 0.33f, 0.38f, 0.94f),
+        LodestoneEntryKind.IcyVeins => Color(0.08f, 0.22f, 0.48f, 0.94f),
+        LodestoneEntryKind.IcyVeinsGuide => Color(0.10f, 0.25f, 0.52f, 0.94f),
         _ => Color(0.48f, 0.36f, 0.13f, 0.94f)
     };
 
@@ -2114,6 +2514,9 @@ public sealed partial class CalendarWindow : Window
         LodestoneEntryKind.Status => Color(1.00f, 0.82f, 0.36f, 0.58f),
         LodestoneEntryKind.Update => Color(0.58f, 0.76f, 1.00f, 0.55f),
         LodestoneEntryKind.Notice => Color(1.00f, 0.84f, 0.38f, 0.58f),
+        LodestoneEntryKind.DeveloperPost => Color(0.52f, 1.00f, 1.00f, 0.55f),
+        LodestoneEntryKind.IcyVeins => Color(0.56f, 0.78f, 1.00f, 0.55f),
+        LodestoneEntryKind.IcyVeinsGuide => Color(0.58f, 0.80f, 1.00f, 0.55f),
         _ => Color(1.00f, 0.82f, 0.42f, 0.50f)
     };
 
@@ -2138,6 +2541,8 @@ public sealed partial class CalendarWindow : Window
         uint R(float value) => (uint)Math.Clamp(value * 255f, 0, 255);
         return R(r) | R(g) << 8 | R(b) << 16 | R(a) << 24;
     }
+
+    private sealed record ArticleInlineRun(string Text, bool Bold, bool Italic);
 
     private sealed record DayHoverRow(string Text, uint Background, LodestoneEntry? Entry, SubmarineReturn? SubmarineReturn);
 
@@ -2168,6 +2573,8 @@ public sealed partial class CalendarWindow : Window
 
     private sealed record CalendarDayCache(CalendarDayCacheKey Key, Dictionary<DateTime, CalendarDayData> Data);
 
+    private sealed record AgendaCache(AgendaCacheKey Key, LodestoneEntry[] Entries);
+
     private readonly record struct CalendarDayCacheKey(
         DateTime Start,
         DateTime End,
@@ -2181,12 +2588,32 @@ public sealed partial class CalendarWindow : Window
         bool ShowUpdates,
         bool ShowStatus,
         bool ShowRecovery,
+        bool ShowDeveloperPosts,
+        bool ShowIcyVeins,
+        bool ShowIcyVeinsGuides,
         bool ShowPartyEvents,
         bool ShowSubmarineReturns,
         int SubmarineReturnsVersion,
         DateTime CurrentFutureCutoff,
         int HiddenEntrySignature,
         int NoteSignature,
+        int PrioritySignature);
+
+    private readonly record struct AgendaCacheKey(
+        int EntriesVersion,
+        string SearchText,
+        bool ShowEvents,
+        bool ShowTopics,
+        bool ShowNotices,
+        bool ShowMaintenance,
+        bool ShowUpdates,
+        bool ShowStatus,
+        bool ShowRecovery,
+        bool ShowDeveloperPosts,
+        bool ShowIcyVeins,
+        bool ShowIcyVeinsGuides,
+        DateTime CurrentFutureCutoff,
+        int HiddenEntrySignature,
         int PrioritySignature);
 
     private sealed class CalendarDayBucket

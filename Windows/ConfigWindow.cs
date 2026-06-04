@@ -64,8 +64,13 @@ public sealed class ConfigWindow : Window
         ImGui.TableNextColumn();
 
         ImGui.TableNextColumn();
-        if (ImGui.Button("Refresh Lodestone##footerRefresh"))
-            _ = plugin.CalendarWindow.RefreshAsync(true);
+        using (ImRaii.PushColor(ImGuiCol.Button, new Vector4(0.12f, 0.34f, 0.62f, 0.96f)))
+        using (ImRaii.PushColor(ImGuiCol.ButtonHovered, new Vector4(0.18f, 0.48f, 0.88f, 1f)))
+        using (ImRaii.PushColor(ImGuiCol.ButtonActive, new Vector4(0.08f, 0.24f, 0.48f, 1f)))
+        {
+            if (ImGui.Button("Refresh Lodestone##footerRefresh"))
+                _ = plugin.CalendarWindow.RefreshAsync(true);
+        }
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Fetch current Lodestone entries now.");
 
@@ -205,6 +210,18 @@ public sealed class ConfigWindow : Window
             DrawCheckbox("Recovery", "Recovery posts from Lodestone status/news. These have their own priority and visibility toggle.", plugin.Configuration.ShowRecovery, v => plugin.Configuration.ShowRecovery = v, refresh: true);
             DrawCheckbox("Updates", "Patch and update posts from the Lodestone update section.", plugin.Configuration.ShowUpdates, v => plugin.Configuration.ShowUpdates = v, refresh: true);
             DrawCheckbox("Status", "Recovery and obstacle/status posts from the Lodestone status section.", plugin.Configuration.ShowStatus, v => plugin.Configuration.ShowStatus = v, refresh: true);
+            DrawCheckbox("Developer posts", "Adds official FFXIV Developers' Blog posts from na.finalfantasyxiv.com/blog.", plugin.Configuration.ShowDeveloperPosts, v => plugin.Configuration.ShowDeveloperPosts = v, refresh: true);
+        });
+
+        ContentBox("sourcesExternal", PanelTeal, false, () =>
+        {
+            SectionHeader(FontAwesomeIcon.Globe, "External sources", White());
+            TextWrappedColored(White(), "Optional third-party sources can add more FFXIV article dates to the calendar. They are off by default so Lodestone stays the main feed.");
+            DrawCheckbox("Icy Veins", "Adds dated FFXIV news articles from Icy Veins with full article text and source links.", plugin.Configuration.ShowIcyVeins, v => plugin.Configuration.ShowIcyVeins = v, refresh: true);
+            ImGui.Indent(18f);
+            using (ImRaii.Disabled(!plugin.Configuration.ShowIcyVeins))
+                DrawCheckbox("Include Icy Veins guides", "Adds FFXIV guide pages from Icy Veins under the Icy Veins source. Guide pages use their own updated date and full guide text.", plugin.Configuration.ShowIcyVeinsGuides, v => plugin.Configuration.ShowIcyVeinsGuides = v, refresh: true);
+            ImGui.Unindent(18f);
         });
 
         ContentBox("sourcesIntegrations", PanelBlue, false, () =>
@@ -233,6 +250,7 @@ public sealed class ConfigWindow : Window
             DrawCheckbox("Show Lodestone images in day cells", "When an event has a hero image, the calendar paints that image behind the day entries.", plugin.Configuration.ShowDayImages, v => plugin.Configuration.ShowDayImages = v);
             DrawCheckbox("Only show day text on hover", "Keeps day cells clean until your mouse is over a date. Corner icons stay visible.", plugin.Configuration.ShowCalendarTextOnHoverOnly, v => plugin.Configuration.ShowCalendarTextOnHoverOnly = v);
             DrawCheckbox("Auto-cycle day hero images", "Cycles through that day's available Lodestone images every 3 seconds. Uses the image cache and is off by default.", plugin.Configuration.AutoCycleDayHeroImages, v => plugin.Configuration.AutoCycleDayHeroImages = v);
+            DrawCheckbox("Pause new image loading in combat", "Performance guard: cached images keep drawing, but Lodestone will not start new image loads while you are in combat.", plugin.Configuration.PauseImageLoadingInCombat, v => plugin.Configuration.PauseImageLoadingInCombat = v);
             DrawCheckbox("Hover text opens exact entry", "When enabled, clicking a Lodestone line in the hover popup opens that specific details window instead of the day list.", plugin.Configuration.HoverTextClickOpensEntry, v => plugin.Configuration.HoverTextClickOpensEntry = v);
             DrawCheckbox("Only show current and future entries", "Hide entries that ended before today.", plugin.Configuration.OnlyCurrentAndFuture, v => plugin.Configuration.OnlyCurrentAndFuture = v);
             DrawCheckbox("Open calendar when plugin loads", "Show the month grid automatically after Dalamud loads the plugin.", plugin.Configuration.OpenCalendarOnStartup, v => plugin.Configuration.OpenCalendarOnStartup = v);
@@ -265,6 +283,7 @@ public sealed class ConfigWindow : Window
             DrawCheckbox("Use 12-hour note times", "Shows note alarm times as 9:00 PM instead of 21:00.", plugin.Configuration.UseTwelveHourNoteTimes, v => plugin.Configuration.UseTwelveHourNoteTimes = v);
             DrawAlarmWarningCombo();
             TextWrappedColored(White(), $"Saved notes: {plugin.Configuration.Notes.Count}");
+            DrawAlarmCenter();
         });
 
         ContentBox("calendarPriority", PanelNews, false, () =>
@@ -277,6 +296,8 @@ public sealed class ConfigWindow : Window
             DrawPrioritySlider("Status", plugin.Configuration.PriorityStatus, v => plugin.Configuration.PriorityStatus = v);
             DrawPrioritySlider("Notices / News", plugin.Configuration.PriorityNotices, v => plugin.Configuration.PriorityNotices = v);
             DrawPrioritySlider("Events", plugin.Configuration.PriorityEvents, v => plugin.Configuration.PriorityEvents = v);
+            DrawPrioritySlider("Developer Posts", plugin.Configuration.PriorityDeveloperPosts, v => plugin.Configuration.PriorityDeveloperPosts = v);
+            DrawPrioritySlider("Icy Veins", plugin.Configuration.PriorityIcyVeins, v => plugin.Configuration.PriorityIcyVeins = v);
 
             if (PanelButton("Reset priority##priorityReset", PanelNews, new Vector2(130, 0)))
             {
@@ -320,12 +341,12 @@ public sealed class ConfigWindow : Window
             var maxEntries = plugin.Configuration.MaxEntriesToScan;
             ImGui.TextUnformatted("Entries enriched");
             ImGui.SetNextItemWidth(220);
-            if (ImGui.SliderInt("entries##lodestoneMaxEntries", ref maxEntries, 5, 250))
+            if (ImGui.SliderInt("entries##lodestoneMaxEntries", ref maxEntries, 5, 500))
             {
                 plugin.Configuration.MaxEntriesToScan = maxEntries;
                 plugin.Configuration.Save();
             }
-            TextWrappedColored(Muted, "Higher values fetch more detail pages and discover more older calendar entries.");
+            TextWrappedColored(Muted, "Higher values fetch more detail pages and discover more older calendar entries. Maximum is 500.");
 
             var maxPages = plugin.Configuration.MaxPagesPerSource;
             ImGui.TextUnformatted("Archive pages per source");
@@ -347,7 +368,9 @@ public sealed class ConfigWindow : Window
             }
             TextWrappedColored(Muted, "The server bar entry appears when maintenance is active or starts within this many hours.");
 
-            if (PanelButton("Refresh now##refreshTabRefresh", Panel, new Vector2(120, 0)))
+            DrawScanProgress();
+
+            if (PanelButton("Refresh now##refreshTabRefresh", PanelTeal, new Vector2(120, 0)))
                 _ = plugin.CalendarWindow.RefreshAsync(true);
             ImGui.SameLine();
             if (PanelButton("Clear data cache##refreshClearData", PanelDanger, new Vector2(140, 0)))
@@ -369,6 +392,12 @@ public sealed class ConfigWindow : Window
                 : "Lodestone data cache: empty.");
             TextWrappedColored(White(), $"Visible entries after filters: {plugin.CalendarWindow.GetVisibleEntries().Length}.");
             TextWrappedColored(White(), $"Image cache: {plugin.ImageCache.CachedTextureCount} loaded, {plugin.ImageCache.ActiveDownloadCount} downloading, {plugin.ImageCache.FailedImageCount} failed.");
+            TextWrappedColored(White(), plugin.ImageCache.LoadingPaused
+                ? $"Image loading paused in combat. {plugin.ImageCache.PausedImageRequestCount} new request{(plugin.ImageCache.PausedImageRequestCount == 1 ? string.Empty : "s")} skipped."
+                : $"Image loading active. {plugin.ImageCache.PausedImageRequestCount} request{(plugin.ImageCache.PausedImageRequestCount == 1 ? string.Empty : "s")} skipped while paused.");
+
+            DrawCacheRetentionCombo();
+            ImGui.Spacing();
 
             if (PanelButton("Clear data cache##cacheBoxClearData", PanelDanger, new Vector2(145, 0)))
             {
@@ -379,6 +408,12 @@ public sealed class ConfigWindow : Window
             ImGui.SameLine();
             if (PanelButton("Clear image cache##cacheBoxClearImages", PanelDanger, new Vector2(150, 0)))
                 plugin.ImageCache.Clear();
+        });
+
+        ContentBox("refreshScanDebug", Panel, false, () =>
+        {
+            SectionHeader(FontAwesomeIcon.Database, "Lodestone scan debug");
+            DrawScanDiagnostics();
         });
     }
 
@@ -642,6 +677,141 @@ public sealed class ConfigWindow : Window
         }
     }
 
+    private void DrawAlarmCenter()
+    {
+        ImGui.Spacing();
+        ImGui.Separator();
+        SectionHeader(FontAwesomeIcon.Clock, "Upcoming reminders", White());
+
+        var noteAlarms = plugin.NoteAlarmService.GetUpcomingNoteAlarms(6);
+        if (noteAlarms.Count > 0)
+        {
+            ImGui.TextColored(Warn, "Notes");
+            foreach (var alarm in noteAlarms)
+                TextWrappedColored(White(), $"{FormatDateTime(alarm.ScheduledAt)} - {alarm.Note.Text} (warning {FormatRefreshInterval(alarm.WarningMinutes)} before)");
+        }
+
+        var maintenance = plugin.CalendarWindow.GetMaintenanceWarnings()
+            .Take(6)
+            .ToArray();
+        if (maintenance.Length > 0)
+        {
+            ImGui.TextColored(Warn, "Maintenance");
+            foreach (var entry in maintenance)
+            {
+                var source = string.IsNullOrWhiteSpace(entry.SourceTimeText) ? string.Empty : $" Source: {entry.SourceTimeText}";
+                TextWrappedColored(White(), $"{FormatDateTime(entry.StartsAt)} - {entry.Title}.{source}");
+            }
+        }
+
+        var now = DateTime.Now;
+        var subs = plugin.SubmarineService.Returns
+            .Where(sub => sub.ReturnAt >= now)
+            .OrderBy(sub => sub.ReturnAt)
+            .Take(6)
+            .ToArray();
+        if (subs.Length > 0)
+        {
+            ImGui.TextColored(Warn, "Submarines");
+            foreach (var sub in subs)
+                TextWrappedColored(White(), $"{FormatDateTime(sub.ReturnAt)} - {sub.VesselName} ({sub.CharacterName})");
+        }
+
+        if (noteAlarms.Count == 0 && maintenance.Length == 0 && subs.Length == 0)
+            TextWrappedColored(Muted, "No upcoming note alarms, maintenance warnings, or submarine returns are inside the current reminder window.");
+    }
+
+    private void DrawCacheRetentionCombo()
+    {
+        var options = CacheRetentionOptions();
+        var current = options.FirstOrDefault(option => option.Days == plugin.Configuration.AutoClearCacheEntriesDays);
+        if (current.Label == null)
+            current = options[0];
+
+        ImGui.TextUnformatted("Auto-clear old data entries");
+        ImGui.SetNextItemWidth(220);
+        using var combo = ImRaii.Combo("##lodestoneCacheRetention", current.Label);
+        if (combo.Success)
+        {
+            foreach (var option in options)
+            {
+                var selected = option.Days == plugin.Configuration.AutoClearCacheEntriesDays;
+                if (ImGui.Selectable(option.Label, selected))
+                {
+                    plugin.Configuration.AutoClearCacheEntriesDays = option.Days;
+                    plugin.Configuration.Save();
+                    _ = plugin.CalendarWindow.RefreshAsync(false);
+                }
+
+                if (selected)
+                    ImGui.SetItemDefaultFocus();
+            }
+        }
+
+        TextWrappedColored(Muted, plugin.Configuration.AutoClearCacheEntriesDays <= 0
+            ? "Off. Cached Lodestone entries stay until you clear data cache or refresh overwrites them."
+            : $"Entries whose end date is older than {current.Label.ToLowerInvariant()} are removed from the local data cache.");
+    }
+
+    private static (string Label, int Days)[] CacheRetentionOptions()
+        =>
+        [
+            ("Off", 0),
+            ("30 days", 30),
+            ("2 months", 60),
+            ("3 months", 90),
+            ("4 months", 120),
+            ("5 months", 150),
+            ("6 months", 180)
+        ];
+
+    private void DrawScanDiagnostics()
+    {
+        DrawScanProgress();
+
+        var diagnostics = plugin.LodestoneClient.LastDiagnostics;
+        if (diagnostics.StartedAtUtc == default)
+        {
+            TextWrappedColored(Muted, diagnostics.Status);
+            return;
+        }
+
+        TextWrappedColored(White(), diagnostics.Status);
+        TextWrappedColored(Muted, $"Last scan: {diagnostics.StartedAtUtc.ToLocalTime():g}{(diagnostics.Duration.HasValue ? $" ({diagnostics.Duration.Value.TotalSeconds:0.0}s)" : string.Empty)}.");
+        TextWrappedColored(Muted, $"Mode: {(diagnostics.Force ? "forced" : "automatic")} | fresh cache: {(diagnostics.UsedFreshCache ? "yes" : "no")}.");
+        TextWrappedColored(White(), $"Sources: {diagnostics.SourceCount}, pages: {diagnostics.PagesFetched}, feed images: {diagnostics.FeedImages}.");
+        TextWrappedColored(White(), $"Index entries: {diagnostics.IndexEntries}, filtered: {diagnostics.FilteredEntries}, enriched: {diagnostics.EnrichedEntries}, cache hits: {diagnostics.CacheHits}, pruned: {diagnostics.PrunedCacheEntries}.");
+        TextWrappedColored(White(), $"External: {diagnostics.ExternalEntries} total, {diagnostics.DeveloperPostEntries} developer posts, {diagnostics.IcyVeinsEntries} Icy Veins articles, {diagnostics.IcyVeinsGuideEntries} Icy Veins guides.");
+        TextWrappedColored(White(), $"Images kept: {diagnostics.ImageUrlsKept}, rejected: {diagnostics.ImageUrlsRejected}, errors: {diagnostics.Errors}.");
+
+        if (!string.IsNullOrWhiteSpace(diagnostics.LastError))
+            TextWrappedColored(new Vector4(1f, 0.72f, 0.72f, 1f), $"Last error: {diagnostics.LastError}");
+
+        foreach (var source in diagnostics.SourceSummaries.Take(6))
+            TextWrappedColored(Muted, source);
+    }
+
+    private void DrawScanProgress()
+    {
+        var progress = plugin.LodestoneClient.CurrentProgress;
+        if (progress.StartedAtUtc == default && !progress.IsActive)
+            return;
+
+        var label = progress.IsActive
+            ? progress.Total > 0
+                ? $"{progress.Status} ({progress.Completed}/{progress.Total})"
+                : progress.Status
+            : $"Last scan: {progress.Status}";
+        UiWidgets.ProgressBar(progress.Percent, label, indeterminate: progress.IsActive && progress.Total <= 0);
+        if (!string.IsNullOrWhiteSpace(progress.Source))
+        {
+            UiWidgets.NeonBadge(progress.Source, new NeonPalette(
+                UiWidgets.Color(0.04f, 0.18f, 0.34f, 0.94f),
+                UiWidgets.Color(0.36f, 0.70f, 1f, 0.90f),
+                UiWidgets.Color(0.72f, 0.88f, 1f, 1f)));
+        }
+    }
+
     private void DrawPrioritySlider(string label, int value, Action<int> setter)
     {
         var localValue = value;
@@ -811,6 +981,11 @@ public sealed class ConfigWindow : Window
 
         return $"{minutes} minutes";
     }
+
+    private string FormatDateTime(DateTime value)
+        => plugin.Configuration.UseTwelveHourNoteTimes
+            ? value.ToString("M/d/yyyy h:mm tt")
+            : value.ToString("M/d/yyyy HH:mm");
 
     private static string FormatBytes(long bytes)
     {

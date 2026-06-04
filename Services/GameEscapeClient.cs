@@ -23,7 +23,7 @@ public sealed class GameEscapeClient : IDisposable
         LoadCache();
     }
 
-    public async Task<GameEscapeQuest> LookupQuestAsync(string questName, CancellationToken cancellationToken = default)
+    public async Task<GameEscapeQuest> LookupQuestAsync(string questName, CancellationToken cancellationToken = default, Action<QuestLookupProgress>? progress = null)
     {
         var slug = Slugify(questName);
         var pageUrl = $"{BaseUrl}/wiki/{slug}";
@@ -33,11 +33,21 @@ public sealed class GameEscapeClient : IDisposable
         GameEscapeQuest? locationFallback = null;
         var locationFallbackChecked = false;
 
-        foreach (var fetcher in new Func<string, CancellationToken, Task<string>>[] { FetchParseApiAsync, FetchRawApiAsync, FetchWikiPageAsync })
+        progress?.Invoke(new QuestLookupProgress("Checking local quest cache.", 0.05f));
+
+        var fetchers = new (string Label, float Percent, Func<string, CancellationToken, Task<string>> Fetcher)[]
+        {
+            ("Trying Gamer Escape parse API.", 0.20f, FetchParseApiAsync),
+            ("Trying Gamer Escape raw API.", 0.42f, FetchRawApiAsync),
+            ("Trying Gamer Escape page HTML.", 0.62f, FetchWikiPageAsync)
+        };
+
+        foreach (var fetcher in fetchers)
         {
             try
             {
-                var content = await fetcher(slug, cancellationToken);
+                progress?.Invoke(new QuestLookupProgress(fetcher.Label, fetcher.Percent, true));
+                var content = await fetcher.Fetcher(slug, cancellationToken);
                 if (string.IsNullOrWhiteSpace(content))
                     continue;
 
@@ -54,15 +64,17 @@ public sealed class GameEscapeClient : IDisposable
                     if (!quest.HasLocation)
                     {
                         locationFallbackChecked = true;
-                        locationFallback = await TryLookupConsoleGamesWikiAsync(slug, questName, consolePageUrl, cancellationToken, errors);
+                        locationFallback = await TryLookupConsoleGamesWikiAsync(slug, questName, consolePageUrl, cancellationToken, errors, progress);
                         if (locationFallback is { HasLocation: true })
                         {
+                            progress?.Invoke(new QuestLookupProgress("Loaded ConsoleGamesWiki location fallback.", 0.96f));
                             SetCachedQuest(slug, locationFallback);
                             return locationFallback;
                         }
                     }
 
                     SetCachedQuest(slug, quest);
+                    progress?.Invoke(new QuestLookupProgress("Loaded quest data.", 1f));
                     return quest;
                 }
             }
@@ -73,24 +85,29 @@ public sealed class GameEscapeClient : IDisposable
         }
 
         if (!locationFallbackChecked)
-            locationFallback = await TryLookupConsoleGamesWikiAsync(slug, questName, consolePageUrl, cancellationToken, errors);
+            locationFallback = await TryLookupConsoleGamesWikiAsync(slug, questName, consolePageUrl, cancellationToken, errors, progress);
 
         if (locationFallback != null)
         {
+            progress?.Invoke(new QuestLookupProgress("Loaded ConsoleGamesWiki fallback.", 0.96f));
             SetCachedQuest(slug, locationFallback);
             return locationFallback;
         }
 
         if (cached != null && IsUsableCachedQuest(cached))
+        {
+            progress?.Invoke(new QuestLookupProgress("Using cached quest data.", 1f));
             return cached;
+        }
 
         throw new InvalidOperationException("Look up failed, Try again later.");
     }
 
-    private async Task<GameEscapeQuest?> TryLookupConsoleGamesWikiAsync(string slug, string questName, string pageUrl, CancellationToken cancellationToken, List<string> errors)
+    private async Task<GameEscapeQuest?> TryLookupConsoleGamesWikiAsync(string slug, string questName, string pageUrl, CancellationToken cancellationToken, List<string> errors, Action<QuestLookupProgress>? progress)
     {
         try
         {
+            progress?.Invoke(new QuestLookupProgress("Trying ConsoleGamesWiki fallback.", 0.82f, true));
             var content = await FetchConsoleRawWikiPageAsync(slug, cancellationToken);
             if (string.IsNullOrWhiteSpace(content))
                 return null;

@@ -185,8 +185,8 @@ public sealed class ServerBar : IDisposable
             Plugin.Notifications.AddNotification(new Notification
             {
                 Content = active
-                    ? $"Maintenance is active: {primary.Title}"
-                    : $"Upcoming maintenance {FormatRelative(primary.StartsAt - now)}: {primary.Title}",
+                    ? $"Maintenance is active until {primary.EffectiveEnd:t} local: {primary.Title}"
+                    : $"Upcoming maintenance {FormatRelative(primary.StartsAt - now)} at {primary.StartsAt:t} local: {primary.Title}",
                 Title = "Lodestone",
                 Type = NotificationType.Warning,
                 Minimized = false
@@ -201,10 +201,13 @@ public sealed class ServerBar : IDisposable
 
     private static string FormatRange(LodestoneEntry entry)
     {
-        if (entry.EffectiveEnd.Date > entry.StartsAt.Date)
-            return $"{entry.StartsAt:D} - {entry.EffectiveEnd:D}";
+        var local = entry.EffectiveEnd.Date > entry.StartsAt.Date
+            ? $"{entry.StartsAt:D} - {entry.EffectiveEnd:D}"
+            : $"{entry.StartsAt:g} - {entry.EffectiveEnd:g}";
 
-        return $"{entry.StartsAt:g} - {entry.EffectiveEnd:g}";
+        return string.IsNullOrWhiteSpace(entry.SourceTimeText)
+            ? local
+            : $"{local} local\nSource: {entry.SourceTimeText}";
     }
 
     private string NoteLabel(CalendarNote note)

@@ -20,6 +20,24 @@ public sealed class NoteAlarmService : IDisposable
         Plugin.Framework.Update -= Update;
     }
 
+    public IReadOnlyList<UpcomingNoteAlarm> GetUpcomingNoteAlarms(int maxCount = 8)
+    {
+        if (!plugin.Configuration.EnableNoteAlarms)
+            return [];
+
+        var warningMinutes = CurrentWarningMinutes();
+        var now = DateTime.Now;
+        var horizon = now.AddDays(14);
+        return plugin.Configuration.Notes
+            .Where(IsAlarmCandidate)
+            .Select(note => new UpcomingNoteAlarm(note, note.ScheduledAt!.Value, note.ScheduledAt!.Value.AddMinutes(-warningMinutes), warningMinutes))
+            .Where(alarm => alarm.ScheduledAt >= now && alarm.ScheduledAt <= horizon)
+            .OrderBy(alarm => alarm.ScheduledAt)
+            .ThenBy(alarm => alarm.Note.Text)
+            .Take(Math.Clamp(maxCount, 1, 30))
+            .ToArray();
+    }
+
     private void Update(IFramework framework)
     {
         if (!plugin.Configuration.EnableNoteAlarms)
@@ -29,9 +47,7 @@ public sealed class NoteAlarmService : IDisposable
             return;
 
         lastUpdate = Environment.TickCount64;
-        var warningMinutes = plugin.Configuration.UseCustomNoteAlarmWarning
-            ? Math.Clamp(plugin.Configuration.CustomNoteAlarmWarningMinutes, 1, 1440)
-            : Math.Clamp(plugin.Configuration.NoteAlarmWarningMinutes, 1, 1440);
+        var warningMinutes = CurrentWarningMinutes();
         var now = DateTime.Now;
         var changed = false;
 
@@ -72,4 +88,11 @@ public sealed class NoteAlarmService : IDisposable
         => plugin.Configuration.UseTwelveHourNoteTimes
             ? scheduledAt.ToString("h:mm tt")
             : scheduledAt.ToString("HH:mm");
+
+    private int CurrentWarningMinutes()
+        => plugin.Configuration.UseCustomNoteAlarmWarning
+            ? Math.Clamp(plugin.Configuration.CustomNoteAlarmWarningMinutes, 1, 1440)
+            : Math.Clamp(plugin.Configuration.NoteAlarmWarningMinutes, 1, 1440);
+
+    public sealed record UpcomingNoteAlarm(CalendarNote Note, DateTime ScheduledAt, DateTime NotifyAt, int WarningMinutes);
 }

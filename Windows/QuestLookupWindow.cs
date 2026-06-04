@@ -13,6 +13,9 @@ public sealed class QuestLookupWindow : Window, IDisposable
     private GameEscapeQuest? quest;
     private string query = string.Empty;
     private string status = "No quest loaded.";
+    private string lookupProgressLabel = string.Empty;
+    private float lookupProgressPercent;
+    private bool lookupProgressIndeterminate = true;
     private bool loading;
     private bool needsPlacement;
     private DateTime keepFlagClipboardUntilUtc;
@@ -40,6 +43,9 @@ public sealed class QuestLookupWindow : Window, IDisposable
         quest = null;
         query = GuessQuestName(entry);
         status = string.IsNullOrWhiteSpace(query) ? "No quest name found for this Lodestone entry." : $"Looking up {query}...";
+        lookupProgressLabel = status;
+        lookupProgressPercent = 0f;
+        lookupProgressIndeterminate = true;
         loading = !string.IsNullOrWhiteSpace(query);
         needsPlacement = true;
         IsOpen = true;
@@ -76,7 +82,7 @@ public sealed class QuestLookupWindow : Window, IDisposable
 
         if (loading)
         {
-            ImGui.TextColored(new Vector4(0.84f, 0.72f, 1f, 1f), status);
+            DrawLoadingPanel();
             return;
         }
 
@@ -93,7 +99,13 @@ public sealed class QuestLookupWindow : Window, IDisposable
     {
         try
         {
-            var loaded = await plugin.GameEscapeClient.LookupQuestAsync(questName, cancellationToken);
+            var loaded = await plugin.GameEscapeClient.LookupQuestAsync(questName, cancellationToken, progress =>
+            {
+                lookupProgressLabel = progress.Status;
+                lookupProgressPercent = progress.Percent;
+                lookupProgressIndeterminate = progress.Indeterminate;
+                status = progress.Status;
+            });
             if (cancellationToken.IsCancellationRequested)
                 return;
 
@@ -113,6 +125,20 @@ public sealed class QuestLookupWindow : Window, IDisposable
             if (!cancellationToken.IsCancellationRequested)
                 loading = false;
         }
+    }
+
+    private void DrawLoadingPanel()
+    {
+        DrawPanel("##questLookupLoading", () =>
+        {
+            var scale = ImGuiHelpers.GlobalScale;
+            using (ImRaii.PushFont(UiBuilder.IconFont))
+                ImGui.TextColored(new Vector4(0.62f, 0.90f, 0.42f, 1f), FontAwesomeIcon.Search.ToIconString());
+            ImGui.SameLine(0, 7f * scale);
+            ImGui.TextColored(new Vector4(0.84f, 0.72f, 1f, 1f), string.IsNullOrWhiteSpace(lookupProgressLabel) ? status : lookupProgressLabel);
+            ImGui.Spacing();
+            UiWidgets.ProgressBar(lookupProgressPercent, string.Empty, indeterminate: lookupProgressIndeterminate);
+        });
     }
 
     private void DrawFailurePanel()
@@ -351,14 +377,25 @@ public sealed class QuestLookupWindow : Window, IDisposable
         {
             var firstLine = entry.Summary
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(CleanQuestNameCandidate)
                 .FirstOrDefault();
             if (!string.IsNullOrWhiteSpace(firstLine) && firstLine.Length <= 80 && firstLine.IndexOfAny(new[] { '.', '!', '?' }) < 0)
                 return firstLine.Trim();
         }
 
-        return entry.Title
+        return CleanQuestNameCandidate(entry.Title)
             .Replace("The ", string.Empty, StringComparison.OrdinalIgnoreCase)
             .Replace(" Campaign", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Trim();
+    }
+
+    internal static string CleanQuestNameCandidate(string value)
+    {
+        return value
+            .Trim()
+            .TrimStart('#', '>', '-', '*', ' ')
+            .Replace("**", string.Empty, StringComparison.Ordinal)
+            .Replace("*", string.Empty, StringComparison.Ordinal)
             .Trim();
     }
 

@@ -8,7 +8,10 @@ public enum LodestoneEntryKind
     Update,
     Status,
     Recovery,
-    SpecialEvent
+    SpecialEvent,
+    DeveloperPost,
+    IcyVeins,
+    IcyVeinsGuide
 }
 
 public sealed class LodestoneEntry
@@ -17,10 +20,16 @@ public sealed class LodestoneEntry
     public string Title { get; set; } = string.Empty;
     public string Url { get; set; } = string.Empty;
     public LodestoneEntryKind Kind { get; set; }
+    public string SourceName { get; set; } = "Lodestone";
+    public string Author { get; set; } = string.Empty;
     public DateTime StartsAt { get; set; }
     public DateTime? EndsAt { get; set; }
     public string Summary { get; set; } = string.Empty;
+    public bool FullArticleParsed { get; set; }
+    public int ArticleFormatVersion { get; set; }
     public string HeroImageUrl { get; set; } = string.Empty;
+    public string SourceTimeZone { get; set; } = string.Empty;
+    public string SourceTimeText { get; set; } = string.Empty;
     public string StartingNpc { get; set; } = string.Empty;
     public string StartingLocation { get; set; } = string.Empty;
     public List<string> Requirements { get; set; } = [];

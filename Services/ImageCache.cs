@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Interface.Textures.TextureWraps;
 
 namespace Lodestone.Services;
@@ -14,9 +15,11 @@ public sealed class ImageCache : IDisposable
     private readonly ConcurrentDictionary<string, Lazy<Task>> downloads = new();
     private readonly ConcurrentDictionary<string, int> failures = new();
     private readonly SemaphoreSlim downloadLimiter = new(4);
+    private readonly Plugin plugin;
 
-    public ImageCache()
+    public ImageCache(Plugin plugin)
     {
+        this.plugin = plugin;
         httpClient.Timeout = TimeSpan.FromSeconds(30);
         httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("LodestoneDalamudPlugin/0.1");
     }
@@ -24,6 +27,9 @@ public sealed class ImageCache : IDisposable
     public int CachedTextureCount => cache.Count;
     public int ActiveDownloadCount => downloads.Count;
     public int FailedImageCount => failures.Count;
+    public int PausedImageRequestCount { get; private set; }
+    public DateTime? LastPausedAt { get; private set; }
+    public bool LoadingPaused => plugin.Configuration.PauseImageLoadingInCombat && IsInCombat();
 
     public IDalamudTextureWrap? GetTexture(string url)
     {
@@ -48,6 +54,13 @@ public sealed class ImageCache : IDisposable
         if (failures.TryGetValue(url, out var failCount) && failCount >= MaxFailures)
             return null;
 
+        if (LoadingPaused)
+        {
+            PausedImageRequestCount++;
+            LastPausedAt = DateTime.Now;
+            return null;
+        }
+
         _ = downloads.GetOrAdd(url, key => new Lazy<Task>(() => StartDownloadAsync(key), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
         return null;
     }
@@ -59,6 +72,20 @@ public sealed class ImageCache : IDisposable
 
         cache.Clear();
         failures.Clear();
+        PausedImageRequestCount = 0;
+        LastPausedAt = null;
+    }
+
+    private static bool IsInCombat()
+    {
+        try
+        {
+            return Plugin.Condition[ConditionFlag.InCombat];
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private Task StartDownloadAsync(string url)
