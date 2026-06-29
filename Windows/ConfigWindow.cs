@@ -248,6 +248,8 @@ public sealed class ConfigWindow : Window
         {
             SectionHeader(FontAwesomeIcon.Image, "Display");
             DrawCheckbox("Show Lodestone images in day cells", "When an event has a hero image, the calendar paints that image behind the day entries.", plugin.Configuration.ShowDayImages, v => plugin.Configuration.ShowDayImages = v);
+            DrawCheckbox("Show seasonal event borders", "Draws alternating seasonal border strips across multi-day special events. On by default.", plugin.Configuration.ShowEventBorders, v => plugin.Configuration.ShowEventBorders = v);
+            DrawCheckbox("Theme UI", "Uses themed artwork for empty day cells and the weekday header. Off by default.", plugin.Configuration.ThemeUi, v => plugin.Configuration.ThemeUi = v);
             DrawCheckbox("Only show day text on hover", "Keeps day cells clean until your mouse is over a date. Corner icons stay visible.", plugin.Configuration.ShowCalendarTextOnHoverOnly, v => plugin.Configuration.ShowCalendarTextOnHoverOnly = v);
             DrawCheckbox("Auto-cycle day hero images", "Cycles through that day's available Lodestone images every 3 seconds. Uses the image cache and is off by default.", plugin.Configuration.AutoCycleDayHeroImages, v => plugin.Configuration.AutoCycleDayHeroImages = v);
             DrawCheckbox("Pause new image loading in combat", "Performance guard: cached images keep drawing, but Lodestone will not start new image loads while you are in combat.", plugin.Configuration.PauseImageLoadingInCombat, v => plugin.Configuration.PauseImageLoadingInCombat = v);

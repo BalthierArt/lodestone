@@ -12,7 +12,7 @@ public class Configuration : IPluginConfiguration
     private static readonly Vector4 DefaultDayHighlightColor = new(0.70f, 0.55f, 0.30f, 0.55f);
     private static readonly Vector4 DefaultDayOfWeekColor = new(0.90f, 0.84f, 0.65f, 1f);
 
-    public int Version { get; set; } = 20;
+    public int Version { get; set; } = 22;
     public string Region { get; set; } = "na";
     public bool ShowEvents { get; set; } = true;
     public bool ShowTopics { get; set; } = true;
@@ -25,6 +25,8 @@ public class Configuration : IPluginConfiguration
     public bool ShowIcyVeins { get; set; } = false;
     public bool ShowIcyVeinsGuides { get; set; } = false;
     public bool ShowDayImages { get; set; } = true;
+    public bool ShowEventBorders { get; set; } = true;
+    public bool ThemeUi { get; set; } = false;
     public bool ShowCalendarTextOnHoverOnly { get; set; } = true;
     public bool HoverTextClickOpensEntry { get; set; } = false;
     public bool AutoCycleDayHeroImages { get; set; } = false;
@@ -250,6 +252,20 @@ public class Configuration : IPluginConfiguration
             Save();
         }
 
+        if (Version < 21)
+        {
+            ShowEventBorders = true;
+            Version = 21;
+            Save();
+        }
+
+        if (Version < 22)
+        {
+            ThemeUi = false;
+            Version = 22;
+            Save();
+        }
+
         PriorityRules ??= DefaultPriorityRules();
         foreach (var rule in PriorityRules.Where(rule => string.IsNullOrWhiteSpace(rule.Id)))
             rule.Id = Guid.NewGuid().ToString("N");
@@ -280,6 +296,8 @@ public class Configuration : IPluginConfiguration
         UseFullDayNames = false;
         UseCustomDayImageDim = false;
         DayImageDimAmount = 0.28f;
+        ShowEventBorders = true;
+        ThemeUi = false;
     }
 
     public Vector4 CurrentDayHighlightColor() => ReadColor(CalendarCurrentDayHighlightColor, DefaultCurrentDayHighlightColor);

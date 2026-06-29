@@ -107,7 +107,7 @@ public sealed class ServerBar : IDisposable
         {
             text = plugin.Configuration.UseShortDtrText
                 ? $"{(char)SeIconChar.Clock} {calendarCount}"
-                : $"Calendar events: {calendarCount}";
+                : $"Events: {calendarCount}";
         }
         else if (maintenanceWarnings.Count > 0)
         {

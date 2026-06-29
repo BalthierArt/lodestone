@@ -7,6 +7,8 @@ var tests = new (string Name, Action Test)[]
     ("maintenance PDT converts to local and preserves source text", TestMaintenancePdt),
     ("invalid maintenance dates do not parse as now", TestInvalidMaintenanceDate),
     ("special event fixture parses schedule, quest, map, and hero", TestSpecialEvent),
+    ("newer special event meta schedule parses optional end year", TestSpecialEventMetaSchedule),
+    ("duplicate special event topic keeps special page", TestSpecialEventDedupe),
     ("topic campaign period is promoted to event", TestTopicCampaignPeriod),
     ("index fixture classifies Lodestone links", TestIndex),
     ("Icy Veins fixture parses full article body", TestIcyVeinsArticle),
@@ -58,7 +60,7 @@ static void TestMaintenancePdt()
     AssertContains(entry.SourceTimeText, "Jun. 2, 2026 3:00 a.m.", "source text");
     AssertContains(entry.Summary, "## [Maintenance] All Worlds Maintenance", "maintenance heading");
     AssertContains(entry.Summary, "We will be performing maintenance", "maintenance paragraph");
-    AssertEqual(4, entry.ArticleFormatVersion, "maintenance format version");
+    AssertEqual(6, entry.ArticleFormatVersion, "maintenance format version");
 }
 
 static void TestInvalidMaintenanceDate()
@@ -90,9 +92,90 @@ static void TestSpecialEvent()
     AssertContains(entry.Title, "Make It Rain", "title");
     AssertContains(entry.Summary, "## You Otter Be There", "summary heading");
     AssertContains(entry.Summary, "Ollier locks eyes", "summary paragraph");
-    AssertEqual(4, entry.ArticleFormatVersion, "special format version");
+    AssertEqual(6, entry.ArticleFormatVersion, "special format version");
     AssertContains(entry.StartingLocation, "Ul'dah", "starting location");
     AssertEqual("https://lds-img.finalfantasyxiv.com/h/s/NWFaAgSpPh0h2emJx69yeD85nY.jpg", entry.HeroImageUrl, "hero");
+}
+
+static void TestSpecialEventMetaSchedule()
+{
+    const string html = """
+                        <html><head>
+                        <title>Breaking Brick Mountains 2026 | FINAL FANTASY XIV, The Lodestone</title>
+                        <meta property="og:description" content="Event Schedule / From Thursday, June 25, 2026 at 1:00 a.m. (PDT) to Monday, July 13 at 7:59 a.m. (PDT)">
+                        <meta property="og:title" content="Breaking Brick Mountains 2026">
+                        </head><body>
+                        <h3>Event Schedule</h3>
+                        <h2 class="content__event-info__quest--title">A Rocky Relationship</h2>
+                        <p class="content__event-info__quest--text">A strangely familiar golem needs a hand.</p>
+                        <div class="body"><div class="inr inr_1sp">
+                        <h3>Event Items</h3>
+                        <p class="mb20">During this event, players can purchase a King Slime Crown and Dragon Quest X Framer's Kit by speaking with the toughie in Ul'dah - Steps of Nald (X:8 Y:12).</p>
+                        <h3>Event Schedule</h3>
+                        <p class="mb20">From Thursday, June 25, 2026 at 1:00 (PDT)<br />to Monday, July 13 at 7:59 (PDT)</p>
+                        <h3>Breaking Brick Mountains</h3>
+                        <p class="mb20">Speak with Havak Alvak of the <i>Mythril Eye</i> to learn where these strange new golems may be found.</p>
+                        <h3>Havak Alvak's Location</h3>
+                        <p class="green mb5">Ul'dah - Steps of Nald</p>
+                        <img src="https://lds-img.finalfantasyxiv.com/h/4/PxJgLA3pMHGK3kZIeTi2gS4pvQ.jpg">
+                        </div></div>
+                        </body></html>
+                        """;
+    var entry = LodestoneClient.ParseSpecialFixture(
+        new LodestoneEntry
+        {
+            Id = "breaking-brick",
+            Title = "Breaking Brick Mountains",
+            Url = "https://na.finalfantasyxiv.com/lodestone/special/2026/Theres_Golems_in_Those_Hills/uG8fdJUc3q",
+            Kind = LodestoneEntryKind.SpecialEvent,
+            StartsAt = new DateTime(2026, 6, 29)
+        },
+        html,
+        string.Empty);
+
+    AssertEqual(new DateTime(2026, 6, 25, 1, 0, 0), entry.StartsAt, "breaking brick start");
+    AssertEqual(new DateTime(2026, 7, 13, 7, 59, 0), entry.EndsAt ?? DateTime.MinValue, "breaking brick end");
+    AssertEqual("PDT", entry.SourceTimeZone, "breaking brick timezone");
+    AssertContains(entry.SourceTimeText, "July 13, 2026", "breaking brick source time");
+    AssertContains(entry.Summary, "## Event Items", "breaking brick event items heading");
+    AssertContains(entry.Summary, "King Slime Crown", "breaking brick item purchase text");
+    AssertContains(entry.Summary, "Speak with Havak Alvak", "breaking brick quest text");
+    AssertEqual("Havak Alvak", entry.StartingNpc, "breaking brick npc");
+    AssertEqual("Ul'dah - Steps of Nald", entry.StartingLocation, "breaking brick location");
+    AssertEqual("https://img.finalfantasyxiv.com/t/53409c75eddec473f0554fe84d6169c4ba5edc97.jpg?1781769746?1781248814", entry.HeroImageUrl, "breaking brick hero");
+}
+
+static void TestSpecialEventDedupe()
+{
+    var entries = LodestoneClient.DeduplicateSpecialEventsFixture(new[]
+    {
+        new LodestoneEntry
+        {
+            Id = "topic",
+            Title = "Breaking Brick Mountains Returns on June 25!",
+            Url = "https://na.finalfantasyxiv.com/lodestone/topics/detail/53409c75eddec473f0554fe84d6169c4ba5edc97",
+            Kind = LodestoneEntryKind.SpecialEvent,
+            StartsAt = new DateTime(2026, 6, 25, 1, 0, 0),
+            EndsAt = new DateTime(2026, 7, 13, 7, 59, 0),
+            HeroImageUrl = "topic.jpg"
+        },
+        new LodestoneEntry
+        {
+            Id = "special",
+            Title = "Breaking Brick Mountains 2026",
+            Url = "https://na.finalfantasyxiv.com/lodestone/special/2026/Theres_Golems_in_Those_Hills/uG8fdJUc3q",
+            Kind = LodestoneEntryKind.SpecialEvent,
+            StartsAt = new DateTime(2026, 6, 25, 1, 0, 0),
+            EndsAt = new DateTime(2026, 7, 13, 7, 59, 0),
+            HeroImageUrl = "special.jpg",
+            Summary = "quest text",
+            Rewards = [new LodestoneReward { Kind = "Item", Name = "Brickman", ImageUrl = "reward.png" }]
+        }
+    });
+
+    AssertEqual(1, entries.Count, "deduped count");
+    AssertContains(entries[0].Url, "/lodestone/special/", "dedupe winner");
+    AssertEqual(1, entries[0].Rewards.Count, "dedupe rewards");
 }
 
 static void TestTopicCampaignPeriod()
@@ -170,7 +253,7 @@ static void TestIcyVeinsArticle()
     AssertContains(entry.Summary, "*soft emphasis*", "article italic emphasis");
     AssertContains(entry.Summary, "- Bring friends.", "article first list item");
     AssertContains(entry.Summary, "- Try the new duty.", "article second list item");
-    AssertEqual(4, entry.ArticleFormatVersion, "article format version");
+    AssertEqual(6, entry.ArticleFormatVersion, "article format version");
     AssertEqual("https://static.icy-veins.com/wp/wp-content/uploads/2026/06/hero.webp", entry.HeroImageUrl, "icy hero");
 }
 
@@ -227,7 +310,7 @@ static void TestIcyVeinsGuide()
     AssertContains(entry.Summary, "- Complete FATEs", "guide list");
     AssertContains(entry.Summary, "[[lodestone-image:", "guide inline image marker");
     AssertContains(entry.Summary, "[[lodestone-copy:", "guide copy marker");
-    AssertEqual(4, entry.ArticleFormatVersion, "guide format version");
+    AssertEqual(6, entry.ArticleFormatVersion, "guide format version");
     AssertEqual("https://static.icy-veins.com/images/ffxiv/background-images/dawntrail.jpg", entry.HeroImageUrl, "guide hero");
 }
 
@@ -262,7 +345,7 @@ static void TestDeveloperBlogArticle()
     AssertContains(entry.Summary, "Hello, everyone!", "blog first paragraph");
     AssertContains(entry.Summary, "Event Period", "blog heading");
     AssertContains(entry.Summary, "Reward one", "blog list");
-    AssertEqual(4, entry.ArticleFormatVersion, "blog format version");
+    AssertEqual(6, entry.ArticleFormatVersion, "blog format version");
     AssertEqual("Developer Blog", entry.Title, "blog title suffix stripped");
     AssertEqual("https://lds-img.finalfantasyxiv.com/blog_image/na_blog/hero.png", entry.HeroImageUrl, "blog hero prefers og image");
 }

@@ -15,10 +15,11 @@ public sealed partial class LodestoneClient : IDisposable
     private const string DefaultMaintenanceHeroImage = ImageCache.AssetScheme + "default-maintenance-hero.png";
     private const string ProducerLiveHeroImage = ImageCache.AssetScheme + "producer-live-hero.png";
     private const string EternalBondingRestrictedHeroImage = ImageCache.AssetScheme + "eternal-bonding-restricted-hero.png";
+    private const string BreakingBrickMountainsHeroImage = "https://img.finalfantasyxiv.com/t/53409c75eddec473f0554fe84d6169c4ba5edc97.jpg?1781769746?1781248814";
     private const string SpecialImageStopMarker = "https://lds-img.finalfantasyxiv.com/h/L/EbtcXqPUGzsVYdi23FpUR25oH4.png";
     private const string IcyVeinsUrl = "https://www.icy-veins.com/ffxiv/";
     private const string OfficialBlogUrl = "https://na.finalfantasyxiv.com/blog/";
-    private const int CurrentArticleFormatVersion = 4;
+    private const int CurrentArticleFormatVersion = 6;
     private const string ArticleCopyMarkerPrefix = "[[lodestone-copy:";
     private const string ArticleImageMarkerPrefix = "[[lodestone-image:";
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
@@ -46,10 +47,14 @@ public sealed partial class LodestoneClient : IDisposable
             await using (var stream = cacheFile.OpenRead())
                 entries = await JsonSerializer.DeserializeAsync<List<LodestoneEntry>>(stream, JsonOptions) ?? [];
 
-            if (configuration == null)
-                return entries;
+            var deduped = DeduplicateSpecialEvents(entries);
+            if (deduped.Count != entries.Count)
+                await SaveCacheAsync(deduped);
 
-            var pruned = ApplyCacheRetention(entries, configuration, out var removed);
+            if (configuration == null)
+                return deduped;
+
+            var pruned = ApplyCacheRetention(deduped, configuration, out var removed);
             if (removed > 0)
                 await SaveCacheAsync(pruned);
             return pruned;
@@ -94,7 +99,7 @@ public sealed partial class LodestoneClient : IDisposable
 
         var cachedEntries = (await LoadCachedAsync()).ToList();
         diagnostics.CachedEntries = cachedEntries.Count;
-        var retainedCachedEntries = ApplyCacheRetention(cachedEntries, configuration, out var prunedFromCache);
+        var retainedCachedEntries = ApplyCacheRetention(DeduplicateSpecialEvents(cachedEntries), configuration, out var prunedFromCache);
         diagnostics.PrunedCacheEntries = prunedFromCache;
         if (prunedFromCache > 0)
             await SaveCacheAsync(retainedCachedEntries);
@@ -166,7 +171,8 @@ public sealed partial class LodestoneClient : IDisposable
         }
 
         SetProgress("Refresh", "Cache", stubs.Count, stubs.Count, "Saving refreshed calendar data.");
-        var retainedResults = ApplyCacheRetention(results, configuration, out var prunedFromResults);
+        var dedupedResults = DeduplicateSpecialEvents(results);
+        var retainedResults = ApplyCacheRetention(dedupedResults, configuration, out var prunedFromResults);
         diagnostics.PrunedCacheEntries += prunedFromResults;
         await SaveCacheAsync(retainedResults);
         diagnostics.Status = $"Refresh complete. {retainedResults.Count} entries available.";
@@ -775,12 +781,7 @@ public sealed partial class LodestoneClient : IDisposable
     private static LodestoneEntry ParseSpecialPage(LodestoneEntry entry, string html, string styles)
     {
         var text = CleanText(html);
-        var schedule = SpecialScheduleRegex().Match(text);
-        if (schedule.Success)
-        {
-            entry.StartsAt = ParseSpecialDate(schedule.Groups["start"].Value);
-            entry.EndsAt = ParseSpecialDate(schedule.Groups["end"].Value);
-        }
+        TryApplySpecialSchedule(entry, html, text);
 
         entry.Kind = LodestoneEntryKind.SpecialEvent;
         var pageTitle = ExtractPageTitle(html);
@@ -789,20 +790,26 @@ public sealed partial class LodestoneClient : IDisposable
 
         var questTitle = CleanText(FirstMatch(html, "<h2[^>]*content__event-info__quest--title[^>]*>(?<value>.*?)</h2>"));
         var questText = CleanArticleText(FirstMatch(html, "<p[^>]*content__event-info__quest--text[^>]*>(?<value>.*?)</p>"));
-        entry.Summary = string.Join("\n\n", new[]
+        var questSummary = string.Join("\n\n", new[]
         {
             string.IsNullOrWhiteSpace(questTitle) ? string.Empty : $"## {questTitle}",
             questText
         }.Where(s => !string.IsNullOrWhiteSpace(s)));
+        var specialBody = ExtractSpecialArticleHtml(html);
+        var specialSummary = CleanArticleText(specialBody);
+        entry.Summary = specialSummary.Length > questSummary.Length ? specialSummary : questSummary;
         entry.ArticleFormatVersion = CurrentArticleFormatVersion;
 
         var mapAlt = WebUtility.HtmlDecode(FirstMatch(html, "<img[^>]*content__event-info__map[^>]*alt=(?:\"(?<value>[^\"]+)\"|'(?<value>[^']+)')[^>]*>"));
         ApplyMapAlt(entry, mapAlt);
+        ApplySpecialLocation(entry, specialBody);
         entry.Requirements = RequirementRegex().Matches(text).Select(m => m.Groups["req"].Value.Trim()).Where(s => s.Length > 0).Distinct().ToList();
 
         var images = TrimAfterStopMarker(ExtractSpecialImages(html, styles)).ToList();
         entry.ImageUrls = images;
-        entry.HeroImageUrl = NormalizeHeroImage(SelectSpecialHeroImage(images) ?? string.Empty, entry.Kind);
+        entry.HeroImageUrl = IsBreakingBrickMountainsEntry(entry)
+            ? BreakingBrickMountainsHeroImage
+            : NormalizeHeroImage(SelectSpecialHeroImage(images) ?? string.Empty, entry.Kind);
         if (!entry.ImageUrls.Contains(entry.HeroImageUrl))
             entry.ImageUrls.Insert(0, entry.HeroImageUrl);
         entry.Rewards = ExtractRewards(text, images);
@@ -888,6 +895,46 @@ public sealed partial class LodestoneClient : IDisposable
             .Select(m => WebUtility.HtmlDecode(m.Groups["url"].Value))
             .Where(u => Uri.TryCreate(u, UriKind.Absolute, out _))
             .Distinct();
+    }
+
+    private static string ExtractSpecialArticleHtml(string html)
+    {
+        var story = FirstMatch(html, "<div[^>]+class=[\"'][^\"']*special_body[^\"']*[\"'][^>]*>(?<value>.*?)</div>\\s*</div>");
+        var eventBody = ExtractSpecialEventBody(html);
+        var parts = new[] { story, eventBody }.Where(part => !string.IsNullOrWhiteSpace(part));
+
+        return string.Join("\n\n", parts);
+    }
+
+    private static string ExtractSpecialEventBody(string html)
+    {
+        var bodyStart = html.IndexOf("<div class=\"body\"><div class=\"inr", StringComparison.OrdinalIgnoreCase);
+        if (bodyStart < 0)
+            return string.Empty;
+
+        var contentStart = html.IndexOf('>', bodyStart);
+        if (contentStart < 0)
+            return string.Empty;
+
+        contentStart = html.IndexOf('>', contentStart + 1);
+        if (contentStart < 0)
+            return string.Empty;
+
+        contentStart++;
+        var endMarkers = new[]
+        {
+            "<div class=\"black\">",
+            "<div class=\"special_footer\">",
+            "<script",
+            "</main>"
+        };
+        var contentEnd = endMarkers
+            .Select(marker => html.IndexOf(marker, contentStart, StringComparison.OrdinalIgnoreCase))
+            .Where(index => index > contentStart)
+            .DefaultIfEmpty(html.Length)
+            .Min();
+
+        return html[contentStart..contentEnd];
     }
 
     private static IEnumerable<string> ExtractExternalImages(string html, string baseUrl)
@@ -1239,6 +1286,10 @@ public sealed partial class LodestoneClient : IDisposable
                    || text.Contains("Restricted", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static bool IsBreakingBrickMountainsEntry(LodestoneEntry entry)
+        => entry.Title.Contains("Breaking Brick Mountains", StringComparison.OrdinalIgnoreCase)
+           || entry.Url.Contains("Theres_Golems_in_Those_Hills", StringComparison.OrdinalIgnoreCase);
+
     private static bool UsesMaintenanceFallback(LodestoneEntryKind kind)
     {
         return kind is LodestoneEntryKind.Maintenance or LodestoneEntryKind.Status or LodestoneEntryKind.Recovery;
@@ -1267,6 +1318,26 @@ public sealed partial class LodestoneClient : IDisposable
 
         entry.StartingLocation = coord.Groups["loc"].Value.Trim();
         entry.StartingNpc = coord.Groups["npc"].Value.Trim();
+    }
+
+    private static void ApplySpecialLocation(LodestoneEntry entry, string specialBody)
+    {
+        if (string.IsNullOrWhiteSpace(specialBody))
+            return;
+
+        var match = Regex.Match(
+            specialBody,
+            "<h[2-4][^>]*>(?<npc>[^<]+?)(?:'s|’s)\\s+Location</h[2-4]>\\s*<p[^>]*>(?<loc>.*?)</p>",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        if (!match.Success)
+            return;
+
+        var npc = CleanArticleInlineText(match.Groups["npc"].Value);
+        var location = CleanArticleInlineText(match.Groups["loc"].Value);
+        if (!string.IsNullOrWhiteSpace(npc))
+            entry.StartingNpc = npc;
+        if (!string.IsNullOrWhiteSpace(location))
+            entry.StartingLocation = location;
     }
 
     private static bool IsContentImage(string url)
@@ -1313,6 +1384,76 @@ public sealed partial class LodestoneClient : IDisposable
         => cachedEntries
             .Where(entry => ShouldInclude(entry.Kind, configuration))
             .All(entry => entry.ArticleFormatVersion >= CurrentArticleFormatVersion && (!IsExternalEntry(entry) || entry.FullArticleParsed));
+
+    private static List<LodestoneEntry> DeduplicateSpecialEvents(IEnumerable<LodestoneEntry> entries)
+    {
+        var deduped = new List<LodestoneEntry>();
+        foreach (var group in entries.GroupBy(SpecialEventDedupeKey))
+        {
+            if (!group.Key.StartsWith("event:", StringComparison.OrdinalIgnoreCase) || group.Count() == 1)
+            {
+                deduped.AddRange(group);
+                continue;
+            }
+
+            var selected = group
+                .OrderByDescending(SpecialEventSourceScore)
+                .ThenByDescending(entry => entry.ImageUrls.Count)
+                .First();
+            selected.ImageUrls = group
+                .SelectMany(entry => entry.ImageUrls.Prepend(entry.HeroImageUrl))
+                .Where(url => !string.IsNullOrWhiteSpace(url))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (selected.Rewards.Count == 0)
+                selected.Rewards = group.SelectMany(entry => entry.Rewards).ToList();
+            if (string.IsNullOrWhiteSpace(selected.SourceTimeText))
+                selected.SourceTimeText = group.Select(entry => entry.SourceTimeText).FirstOrDefault(text => !string.IsNullOrWhiteSpace(text)) ?? string.Empty;
+            deduped.Add(selected);
+        }
+
+        return deduped;
+    }
+
+    private static string SpecialEventDedupeKey(LodestoneEntry entry)
+    {
+        if (entry.Kind != LodestoneEntryKind.SpecialEvent || !entry.EndsAt.HasValue)
+            return $"entry:{entry.Id}";
+
+        var normalizedTitle = NormalizeSpecialEventTitle(entry.Title);
+        return string.IsNullOrWhiteSpace(normalizedTitle)
+            ? $"entry:{entry.Id}"
+            : $"event:{entry.StartsAt.Date:yyyyMMdd}:{entry.EffectiveEnd.Date:yyyyMMdd}:{normalizedTitle}";
+    }
+
+    private static int SpecialEventSourceScore(LodestoneEntry entry)
+    {
+        var score = 0;
+        if (entry.Url.Contains("/lodestone/special/", StringComparison.OrdinalIgnoreCase))
+            score += 100;
+        if (entry.FullArticleParsed)
+            score += 20;
+        if (entry.Rewards.Count > 0)
+            score += 10;
+        if (!string.IsNullOrWhiteSpace(entry.StartingLocation))
+            score += 10;
+        if (!string.IsNullOrWhiteSpace(entry.SourceTimeText))
+            score += 5;
+        return score;
+    }
+
+    private static string NormalizeSpecialEventTitle(string title)
+    {
+        var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "a", "an", "and", "at", "campaign", "event", "for", "from", "in", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "new", "of", "on", "return", "returns", "the", "to", "with"
+        };
+        var words = Regex.Matches(title.ToLowerInvariant(), "[a-z0-9]+")
+            .Select(match => match.Value)
+            .Where(word => !word.All(char.IsDigit) && !stopWords.Contains(word))
+            .Take(8);
+        return string.Join(' ', words);
+    }
 
     private static string SourceLabel(LodestoneEntry entry)
         => !string.IsNullOrWhiteSpace(entry.SourceName) && !entry.SourceName.Equals("Lodestone", StringComparison.OrdinalIgnoreCase)
@@ -1436,6 +1577,38 @@ public sealed partial class LodestoneClient : IDisposable
             ? $"{match.Groups["start"].Value} to {match.Groups["end"].Value}"
             : $"{match.Groups["start"].Value} to {match.Groups["end"].Value} ({timezone})";
         return true;
+    }
+
+    private static bool TryApplySpecialSchedule(LodestoneEntry entry, string html, string text)
+    {
+        var description = WebUtility.HtmlDecode(FirstMatch(html, "<meta[^>]+(?:property|name)=[\"'](?:og:description|description)[\"'][^>]+content=[\"'](?<value>[^\"']+)[\"'][^>]*>"));
+        var scheduleText = string.IsNullOrWhiteSpace(description) ? text : $"{description} {text}";
+        var match = SpecialScheduleRegex().Match(scheduleText);
+        if (!match.Success)
+            return false;
+
+        var startText = match.Groups["start"].Value;
+        var endText = NormalizeSpecialEndDate(match.Groups["end"].Value, startText);
+        entry.StartsAt = ParseSpecialDate(startText);
+        entry.EndsAt = ParseSpecialDate(endText);
+        entry.SourceTimeZone = match.Groups["endtz"].Success
+            ? match.Groups["endtz"].Value.Trim()
+            : match.Groups["starttz"].Value.Trim();
+        entry.SourceTimeText = string.IsNullOrWhiteSpace(entry.SourceTimeZone)
+            ? $"{startText} to {endText}"
+            : $"{startText} to {endText} ({entry.SourceTimeZone})";
+        return true;
+    }
+
+    private static string NormalizeSpecialEndDate(string endText, string startText)
+    {
+        if (Regex.IsMatch(endText, "\\b\\d{4}\\b"))
+            return endText;
+
+        var year = Regex.Match(startText, "\\b(?<year>20\\d{2})\\b").Groups["year"].Value;
+        return string.IsNullOrWhiteSpace(year)
+            ? endText
+            : Regex.Replace(endText, "(?<day>\\b\\d{1,2})(?=\\s+at\\s+)", $"${{day}}, {year}", RegexOptions.IgnoreCase);
     }
 
     private static bool TryParseEventPeriodDate(string value, string timezone, out DateTime result)
@@ -1689,6 +1862,7 @@ public sealed partial class LodestoneClient : IDisposable
     internal static LodestoneEntry ParseDeveloperBlogFixture(LodestoneEntry entry, string html) => ParseDeveloperBlogPage(entry, html);
     internal static IReadOnlyList<LodestoneEntry> ParseOfficialBlogIndexFixture(string html) => ParseOfficialBlogIndex(html, OfficialBlogUrl).ToArray();
     internal static DateTime? ParseMaintenanceDateFixture(string value, string timezone) => ParseMaintenanceDate(value, timezone);
+    internal static IReadOnlyList<LodestoneEntry> DeduplicateSpecialEventsFixture(IEnumerable<LodestoneEntry> entries) => DeduplicateSpecialEvents(entries);
 
     [GeneratedRegex("<a[^>]+href=[\"'](?<href>[^\"']+)[\"'][^>]*>(?<text>.*?)</a>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex IndexLinkRegex();
@@ -1704,7 +1878,7 @@ public sealed partial class LodestoneClient : IDisposable
     private static partial Regex SpecialHeroRuleRegex();
     [GeneratedRegex("ldst_strftime\\((?<ts>\\d+),", RegexOptions.IgnoreCase)]
     private static partial Regex TimestampRegex();
-    [GeneratedRegex("(?:From\\s+)?(?<start>(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\\s+[A-Z][a-z]+\\s+\\d{1,2},\\s+\\d{4}\\s+at\\s+\\d{1,2}:\\d{2}\\s+[ap]\\.m\\.)\\s+to\\s+(?<end>(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\\s+[A-Z][a-z]+\\s+\\d{1,2},\\s+\\d{4}\\s+at\\s+\\d{1,2}:\\d{2}\\s+[ap]\\.m\\.)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("(?:Event\\s+Schedule\\s*/\\s*)?(?:From\\s+)?(?<start>(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\\s+[A-Z][a-z]+\\s+\\d{1,2},\\s+\\d{4}\\s+at\\s+\\d{1,2}:\\d{2}\\s+[ap]\\.?m\\.?)\\s*(?:\\((?<starttz>[^)]+)\\))?\\s+to\\s+(?<end>(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\\s+[A-Z][a-z]+\\s+\\d{1,2}(?:,\\s+\\d{4})?\\s+at\\s+\\d{1,2}:\\d{2}\\s+[ap]\\.?m\\.?)\\s*(?:\\((?<endtz>[^)]+)\\))?", RegexOptions.IgnoreCase)]
     private static partial Regex SpecialScheduleRegex();
     [GeneratedRegex("Level\\s+(?<req>\\d+)|Players must first complete the quest\\s+\"(?<req>[^\"]+)\"", RegexOptions.IgnoreCase)]
     private static partial Regex RequirementRegex();

@@ -19,6 +19,8 @@ public sealed partial class CalendarWindow : Window
     private const string SubmarineReturnMarkerAsset = ImageCache.AssetScheme + "subicon.png";
     private const string SubmarineReturnedHeroAsset = ImageCache.AssetScheme + "subreturned.png";
     private const string IcyVeinsArticleMarkerAsset = ImageCache.AssetScheme + "ivart.png";
+    private const string ThemeEmptyDayAsset = ImageCache.AssetScheme + "emptyday.png";
+    private const string ThemeDaysOfWeekAsset = ImageCache.AssetScheme + "daysweek.png";
     private const string LodestoneImageStopMarker = "https://lds-img.finalfantasyxiv.com/h/L/EbtcXqPUGzsVYdi23FpUR25oH4.png";
     private const string ArticleCopyMarkerPrefix = "[[lodestone-copy:";
     private const string ArticleImageMarkerPrefix = "[[lodestone-image:";
@@ -207,16 +209,7 @@ public sealed partial class CalendarWindow : Window
         var cellHeight = Math.Max(92f * ImGuiHelpers.GlobalScale, (available.Y - 42f * ImGuiHelpers.GlobalScale) / 6f - ImGui.GetStyle().ItemSpacing.Y);
         var cellSize = new Vector2(cellWidth, cellHeight);
 
-        var dayNames = plugin.Configuration.UseFullDayNames ? FullDayNames : DayNames;
-        using (ImRaii.PushColor(ImGuiCol.Text, plugin.Configuration.DayOfWeekColor()))
-        {
-            for (var i = 0; i < dayNames.Length; i++)
-            {
-                ImGui.TextUnformatted(dayNames[i]);
-                if (i < dayNames.Length - 1)
-                    ImGui.SameLine((cellWidth + ImGui.GetStyle().ItemSpacing.X) * (i + 1));
-            }
-        }
+        var dayOfWeekHeader = DrawDayOfWeekHeader(cellWidth);
 
         var first = new DateTime(visibleMonth.Year, visibleMonth.Month, 1);
         var start = first.AddDays(-(int)first.DayOfWeek);
@@ -233,6 +226,49 @@ public sealed partial class CalendarWindow : Window
                     ImGui.SameLine();
             }
         }
+
+        if (dayOfWeekHeader.ThemeDrawn)
+            DrawThemeDayOfWeekHeader(dayOfWeekHeader.Min, dayOfWeekHeader.Max);
+    }
+
+    private DayOfWeekHeaderBounds DrawDayOfWeekHeader(float cellWidth)
+    {
+        var spacing = ImGui.GetStyle().ItemSpacing.X;
+        var totalWidth = cellWidth * 7f + spacing * 6f;
+        if (plugin.Configuration.ThemeUi)
+        {
+            var min = ImGui.GetCursorScreenPos();
+            var height = Math.Max(20f * ImGuiHelpers.GlobalScale, ImGui.GetTextLineHeightWithSpacing());
+            var max = min + new Vector2(totalWidth, height);
+            if (DrawThemeDayOfWeekHeader(min, max))
+            {
+                ImGui.Dummy(new Vector2(totalWidth, height));
+                return new DayOfWeekHeaderBounds(min, max, true);
+            }
+        }
+
+        var dayNames = plugin.Configuration.UseFullDayNames ? FullDayNames : DayNames;
+        using (ImRaii.PushColor(ImGuiCol.Text, plugin.Configuration.DayOfWeekColor()))
+        {
+            for (var i = 0; i < dayNames.Length; i++)
+            {
+                ImGui.TextUnformatted(dayNames[i]);
+                if (i < dayNames.Length - 1)
+                    ImGui.SameLine((cellWidth + spacing) * (i + 1));
+            }
+        }
+
+        return new DayOfWeekHeaderBounds(Vector2.Zero, Vector2.Zero, false);
+    }
+
+    private bool DrawThemeDayOfWeekHeader(Vector2 min, Vector2 max)
+    {
+        var texture = plugin.ImageCache.GetTexture(ThemeDaysOfWeekAsset);
+        if (texture == null)
+            return false;
+
+        ImGui.GetWindowDrawList().AddImage(texture.Handle, min, max);
+        return true;
     }
 
     private Dictionary<DateTime, CalendarDayData> BuildCalendarDayData(DateTime start, DateTime end)
@@ -296,9 +332,12 @@ public sealed partial class CalendarWindow : Window
                 .OrderBy(submarineReturn => submarineReturn.ReturnAt)
                 .ThenBy(submarineReturn => submarineReturn.VesselName)
                 .ToArray();
+            var hasEventBoundary = sortedEntries.Any(entry => IsEventBoundaryDay(entry, day));
             var heroCandidates = GetHeroImageCandidates(sortedEntries).ToArray();
-            if (sortedSubmarineReturns.Length > 0)
+            if (sortedSubmarineReturns.Length > 0 && !hasEventBoundary)
                 heroCandidates = [SubmarineReturnedHeroAsset, .. heroCandidates];
+            else if (sortedSubmarineReturns.Length > 0)
+                heroCandidates = [.. heroCandidates, SubmarineReturnedHeroAsset];
             var cornerKinds = sortedEntries
                 .Select(entry => entry.Kind)
                 .Distinct()
@@ -311,9 +350,10 @@ public sealed partial class CalendarWindow : Window
                 sortedNotes,
                 sortedPartyEvents,
                 sortedSubmarineReturns,
-                sortedSubmarineReturns.Length > 0 ? SubmarineReturnedHeroAsset : SelectHeroImageUrl(sortedEntries),
+                sortedSubmarineReturns.Length > 0 && !hasEventBoundary ? SubmarineReturnedHeroAsset : SelectHeroImageUrl(sortedEntries),
                 heroCandidates,
                 cornerKinds,
+                SelectEventBorderOverlay(day, sortedEntries),
                 sortedEntries.Any(entry => entry.Kind == LodestoneEntryKind.SpecialEvent && entry.IsMultiDay),
                 sortedEntries.Any(entry => IsEventStartDay(entry, day)),
                 sortedEntries.Any(entry => IsEventEndDay(entry, day)),
@@ -451,20 +491,30 @@ public sealed partial class CalendarWindow : Window
         drawList.AddRectFilled(min, max, bg, 3f);
 
         var heroImageUrl = SelectHeroImageUrl(day.Date, data, dayHovered || overlayHovered);
+        var heroDrawn = false;
         if (!string.IsNullOrEmpty(heroImageUrl) && plugin.Configuration.ShowDayImages)
         {
             var texture = plugin.ImageCache.GetTexture(heroImageUrl);
             if (texture != null)
             {
+                heroDrawn = true;
                 var imageAlpha = DayImageAlpha(today, currentMonth);
                 ImGui.GetWindowDrawList().AddImage(texture.Handle, min, max, Vector2.Zero, Vector2.One, Color(1f, 1f, 1f, imageAlpha));
                 if (IsIcyVeinsArticleHeroActive(heroImageUrl, data))
                     DrawIcyVeinsArticleMarker(min, max, currentMonth);
             }
 
+        }
+
+        if (heroDrawn)
+        {
             var filmAlpha = DayFilmAlpha(today, currentMonth);
             if (filmAlpha > 0f)
                 drawList.AddRectFilled(min, max, Color(0f, 0f, 0f, filmAlpha), 3f);
+        }
+        else if (plugin.Configuration.ThemeUi)
+        {
+            DrawThemedEmptyDay(min, max, currentMonth);
         }
 
         if (today)
@@ -474,6 +524,9 @@ public sealed partial class CalendarWindow : Window
             var highlight = plugin.Configuration.DayHighlightColor();
             drawList.AddRect(min, max, WithAlpha(highlight, currentMonth ? highlight.W : highlight.W * 0.36f), 3f);
         }
+
+        if (plugin.Configuration.ShowEventBorders)
+            DrawEventBorderOverlay(data.EventBorderOverlay, min, max, currentMonth);
 
         if (data.HasMultiDayEvent)
         {
@@ -485,8 +538,7 @@ public sealed partial class CalendarWindow : Window
         var submarineHeroShown = plugin.Configuration.ShowDayImages && string.Equals(heroImageUrl, SubmarineReturnedHeroAsset, StringComparison.OrdinalIgnoreCase);
         DrawSubmarineReturnMarker(data.HasSubmarineReturn && !submarineHeroShown, data.HasEventStart || data.HasEventEnd, min, max, currentMonth);
 
-        ImGui.SetCursorScreenPos(min + new Vector2(6f, 4f) * ImGuiHelpers.GlobalScale);
-        ImGui.TextUnformatted(day.Day.ToString());
+        DrawDayNumber(day.Day, min + new Vector2(6f, 4f) * ImGuiHelpers.GlobalScale, currentMonth);
 
         DrawDayCornerIcons(data.CornerKinds, dayNotes.Length, data.HasSubmarineReturn, min, max, currentMonth);
         DrawPartyEventCenterIcon(partyEvents, min, max, currentMonth);
@@ -784,6 +836,16 @@ public sealed partial class CalendarWindow : Window
 
         var scale = ImGuiHelpers.GlobalScale;
         var drawList = ImGui.GetWindowDrawList();
+        if (hasStart && hasEnd)
+        {
+            var cornerPadding = 7f * scale;
+            var compactStartSize = new Vector2(48f, 48f) * scale;
+            var compactEndSize = new Vector2(68f, 42f) * scale;
+            DrawEventBoundaryMarker(EventStartMarkerAsset, "START", FontAwesomeIcon.PlayCircle, min + new Vector2(cornerPadding, 22f * scale), compactStartSize, currentMonth);
+            DrawEventBoundaryMarker(EventEndMarkerAsset, "END", FontAwesomeIcon.FlagCheckered, max - compactEndSize - new Vector2(cornerPadding, cornerPadding), compactEndSize, currentMonth);
+            return;
+        }
+
         var count = hasStart && hasEnd ? 2 : 1;
         var gap = 6f * scale;
         var startSize = new Vector2(80f, 80f) * scale;
@@ -824,6 +886,49 @@ public sealed partial class CalendarWindow : Window
 
         var text = FitTextToWidth(fallbackText, size.X - iconSize.X - 10f * ImGuiHelpers.GlobalScale);
         drawList.AddText(min + new Vector2(iconSize.X + 7f * ImGuiHelpers.GlobalScale, (size.Y - ImGui.GetTextLineHeight()) * 0.5f), Color(1f, 0.82f, 0.42f, currentMonth ? 1f : 0.72f), text);
+    }
+
+    private static void DrawDayNumber(int day, Vector2 position, bool currentMonth)
+    {
+        var drawList = ImGui.GetWindowDrawList();
+        var text = day.ToString();
+        var scale = ImGuiHelpers.GlobalScale;
+        var textColor = Color(1f, 1f, 1f, currentMonth ? 1f : 0.65f);
+        var outlineColor = Color(0f, 0f, 0f, currentMonth ? 0.95f : 0.72f);
+        var offset = MathF.Max(1f, scale);
+
+        drawList.AddText(position + new Vector2(-offset, 0f), outlineColor, text);
+        drawList.AddText(position + new Vector2(offset, 0f), outlineColor, text);
+        drawList.AddText(position + new Vector2(0f, -offset), outlineColor, text);
+        drawList.AddText(position + new Vector2(0f, offset), outlineColor, text);
+        drawList.AddText(position, textColor, text);
+    }
+
+    private void DrawThemedEmptyDay(Vector2 min, Vector2 max, bool currentMonth)
+    {
+        var texture = plugin.ImageCache.GetTexture(ThemeEmptyDayAsset);
+        if (texture == null)
+            return;
+
+        ImGui.GetWindowDrawList().AddImage(texture.Handle, min, max, Vector2.Zero, Vector2.One, Color(1f, 1f, 1f, currentMonth ? 1f : 0.45f));
+    }
+
+    private void DrawEventBorderOverlay(EventBorderOverlay? overlay, Vector2 min, Vector2 max, bool currentMonth)
+    {
+        if (overlay == null)
+            return;
+
+        var texture = plugin.ImageCache.GetTexture(overlay.Asset);
+        if (texture == null)
+            return;
+
+        var scale = ImGuiHelpers.GlobalScale;
+        var height = 27f * scale;
+        var overlap = 14f * scale;
+        var horizontalBleed = 5f * scale;
+        var drawMin = new Vector2(min.X - horizontalBleed, min.Y - overlap);
+        var drawMax = new Vector2(max.X + horizontalBleed, drawMin.Y + height);
+        ImGui.GetWindowDrawList().AddImage(texture.Handle, drawMin, drawMax, Vector2.Zero, Vector2.One, Color(1f, 1f, 1f, currentMonth ? 1f : 0.68f));
     }
 
     private void DrawIcyVeinsArticleMarker(Vector2 min, Vector2 max, bool currentMonth)
@@ -1070,6 +1175,22 @@ public sealed partial class CalendarWindow : Window
         return ResolveHeroImageUrl(heroEntry);
     }
 
+    private EventBorderOverlay? SelectEventBorderOverlay(DateTime day, IReadOnlyList<LodestoneEntry> sortedEntries)
+    {
+        var entry = sortedEntries
+            .Where(entry => entry.Kind == LodestoneEntryKind.SpecialEvent && EntryCoversDay(entry, day))
+            .OrderByDescending(entry => DayDisplayPriority(entry, day))
+            .ThenBy(entry => entry.StartsAt)
+            .FirstOrDefault();
+        if (entry == null)
+            return null;
+
+        var set = EventBorderSet(entry, day);
+        var offset = Math.Max(0, (day.Date - entry.StartsAt.Date).Days);
+        var variant = offset % 2 == 0 ? "A" : "B";
+        return new EventBorderOverlay(ImageCache.AssetScheme + $"{set}{variant}.png");
+    }
+
     private bool IsIcyVeinsArticleHeroActive(string heroImageUrl, CalendarDayData data)
     {
         if (string.IsNullOrWhiteSpace(heroImageUrl))
@@ -1078,6 +1199,39 @@ public sealed partial class CalendarWindow : Window
         return data.Entries.Any(entry =>
             entry.Kind == LodestoneEntryKind.IcyVeins &&
             string.Equals(ResolveHeroImageUrl(entry), heroImageUrl, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string EventBorderSet(LodestoneEntry entry, DateTime day)
+    {
+        var title = $"{entry.Title} {entry.Summary}";
+        if (title.Contains("make it rain", StringComparison.OrdinalIgnoreCase))
+            return "MakeitRain";
+        if (title.Contains("starlight", StringComparison.OrdinalIgnoreCase))
+            return "Starlight";
+        if (title.Contains("heavensturn", StringComparison.OrdinalIgnoreCase))
+            return "heavensturn";
+        if (title.Contains("hatching", StringComparison.OrdinalIgnoreCase))
+            return "hatchingtide";
+        if (title.Contains("valentione", StringComparison.OrdinalIgnoreCase))
+            return "Valentione";
+        if (title.Contains("little ladies", StringComparison.OrdinalIgnoreCase) || title.Contains("little ladies'", StringComparison.OrdinalIgnoreCase) || title.Contains("little lady", StringComparison.OrdinalIgnoreCase))
+            return "littleladisday";
+        if (title.Contains("moonfire", StringComparison.OrdinalIgnoreCase) || title.Contains("moon faire", StringComparison.OrdinalIgnoreCase))
+            return "moonfaire";
+        if (title.Contains("all saints", StringComparison.OrdinalIgnoreCase) || title.Contains("saints wake", StringComparison.OrdinalIgnoreCase))
+            return "saintwakes";
+        if (title.Contains("the rising", StringComparison.OrdinalIgnoreCase))
+            return "rising";
+        if (title.Contains("moogle treasure", StringComparison.OrdinalIgnoreCase) || title.Contains("treasure trove", StringComparison.OrdinalIgnoreCase) || title.Contains("tomestone", StringComparison.OrdinalIgnoreCase))
+            return "treasuretome";
+
+        return day.Month switch
+        {
+            12 or 1 or 2 => "winter",
+            >= 3 and <= 5 => "spring",
+            >= 6 and <= 8 => "summer",
+            _ => "fall"
+        };
     }
 
     private string SelectCyclingHeroImageUrl(DateTime day, IReadOnlyList<string> heroes)
@@ -2742,6 +2896,10 @@ public sealed partial class CalendarWindow : Window
 
     private sealed record DayHeroPreview(DateTime Day, string HeroImageUrl);
 
+    private readonly record struct DayOfWeekHeaderBounds(Vector2 Min, Vector2 Max, bool ThemeDrawn);
+
+    private sealed record EventBorderOverlay(string Asset);
+
     private sealed record DayHoverOverlay(DateTime Day, Vector2 Min, Vector2 Max, CalendarNote[] Notes, PartyEvent[] PartyEvents, SubmarineReturn[] SubmarineReturns, LodestoneEntry[] Entries, bool CurrentMonth)
     {
         public Vector2 PopupMin { get; init; }
@@ -2757,12 +2915,13 @@ public sealed partial class CalendarWindow : Window
         string HeroImageUrl,
         string[] HeroImageCandidates,
         LodestoneEntryKind[] CornerKinds,
+        EventBorderOverlay? EventBorderOverlay,
         bool HasMultiDayEvent,
         bool HasEventStart,
         bool HasEventEnd,
         bool HasSubmarineReturn)
     {
-        public static readonly CalendarDayData Empty = new([], [], [], [], string.Empty, [], [], false, false, false, false);
+        public static readonly CalendarDayData Empty = new([], [], [], [], string.Empty, [], [], null, false, false, false, false);
     }
 
     private sealed record CalendarDayCache(CalendarDayCacheKey Key, Dictionary<DateTime, CalendarDayData> Data);
